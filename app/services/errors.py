@@ -33,3 +33,29 @@ class IdempotencyInProgress(DomainError):
 
 class StorageFailure(DomainError):
     http_status = 502
+
+
+class NotFound(DomainError):
+    http_status = 404
+
+
+class Conflict(DomainError):
+    http_status = 409
+
+
+class MaxUsersReached(Conflict):
+    """The company already has its maximum number of users."""
+
+
+class LastCompanyAdmin(Conflict):
+    """Operation would leave the company without an active company_admin."""
+
+
+class RateLimited(DomainError):
+    http_status = 429
+
+
+class InviteFailed(DomainError):
+    """The invitation could not be completed; retry is safe."""
+
+    http_status = 502

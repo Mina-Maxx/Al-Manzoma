@@ -17,14 +17,18 @@ from app.models import (
     DocumentStatus,
     IdempotencyKey,
     Membership,
+    MembershipRole,
+    PlatformAdmin,
     Quarry,
     QuarryPermission,
+    QuarryStatus,
     User,
     UserStatus,
 )
-from app.security.context import AuthContext
+from app.security.context import AuthContext, PlatformAdminContext
 from app.security.jwt import JwtVerificationError, JwtVerifier
 from app.services.audit import AuditService
+from app.services.identity import IdentityProvider
 from app.storage.base import Storage
 
 _bearer = HTTPBearer(auto_error=False)
@@ -58,12 +62,35 @@ def get_storage(request: Request) -> Storage:
     return request.app.state.storage
 
 
+def get_identity(request: Request) -> IdentityProvider:
+    return request.app.state.identity
+
+
 def _unauthorized() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="invalid or missing credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+def _forbidden(detail: str = "forbidden") -> HTTPException:
+    return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
+def _verify_claims(
+    credentials: HTTPAuthorizationCredentials | None,
+    verifier: JwtVerifier,
+    audit: AuditService,
+    request: Request,
+) -> dict:
+    if credentials is None or not credentials.credentials:
+        raise _unauthorized()
+    try:
+        return verifier.verify(credentials.credentials)
+    except JwtVerificationError:
+        audit.record(action="auth.verify", result=AuditResult.denied, request=request)
+        raise _unauthorized()
 
 
 def get_auth_context(
@@ -130,12 +157,56 @@ def get_auth_context(
     return AuthContext(user=user, company=company, membership=membership, claims=claims)
 
 
+def get_platform_admin(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    db: Session = Depends(get_db),
+    verifier: JwtVerifier = Depends(get_verifier),
+    audit: AuditService = Depends(get_audit),
+) -> PlatformAdminContext:
+    """Resolve a platform operator. Never consults memberships."""
+    claims = _verify_claims(credentials, verifier, audit, request)
+    sub = claims.get("sub")
+    if not sub:
+        audit.record(action="auth.verify", result=AuditResult.denied, request=request)
+        raise _unauthorized()
+
+    admin = db.execute(
+        select(PlatformAdmin).where(PlatformAdmin.auth_user_id == str(sub))
+    ).scalar_one_or_none()
+    if admin is None or admin.status != UserStatus.active:
+        audit.record(
+            action="platform_admin.lookup",
+            result=AuditResult.denied,
+            target_type="platform_admin",
+            request=request,
+        )
+        raise _forbidden("not a platform administrator")
+
+    return PlatformAdminContext(admin=admin, claims=claims)
+
+
+def require_company_admin(
+    ctx: AuthContext = Depends(get_auth_context),
+) -> AuthContext:
+    """Only a company_admin may reach company management endpoints."""
+    if ctx.role != MembershipRole.company_admin:
+        raise _forbidden("company administrator role required")
+    return ctx
+
+
 def _load_quarry_in_company(
     db: Session, company_id: uuid.UUID, quarry_id: uuid.UUID
 ) -> Quarry:
     quarry = db.get(Quarry, quarry_id)
-    if quarry is None or quarry.company_id != company_id:
-        # Cross-tenant access is indistinguishable from a missing resource.
+    # Cross-tenant access is indistinguishable from a missing resource. An
+    # inactive quarry is also treated as missing so its documents are neither
+    # listed nor downloadable.
+    if (
+        quarry is None
+        or quarry.company_id != company_id
+        or quarry.status != QuarryStatus.active
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="quarry not found")
     return quarry
 
@@ -190,6 +261,20 @@ def get_download_document(
         or document.company_id != ctx.company_id
         or document.status != DocumentStatus.available
     ):
+        audit.record(
+            action="document.download",
+            result=AuditResult.denied,
+            company_id=ctx.company_id,
+            actor_user_id=ctx.user_id,
+            target_type="document",
+            target_id=document_id,
+            request=request,
+        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
+
+    quarry = db.get(Quarry, document.quarry_id)
+    if quarry is None or quarry.status != QuarryStatus.active:
+        # A document in a deactivated quarry is not downloadable.
         audit.record(
             action="document.download",
             result=AuditResult.denied,

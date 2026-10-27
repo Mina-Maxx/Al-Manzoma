@@ -7,10 +7,12 @@ from fastapi.responses import JSONResponse
 
 from app.config import Settings, get_settings
 from app.db import build_engine_from_settings, build_session_factory
-from app.routers import dev, documents, health, me, quarries
+from app.routers import company_admin, dev, documents, health, me, platform, quarries
 from app.security.jwt import JwtVerifier, build_dev_verifier, build_jwt_verifier
 from app.services.audit import AuditService
 from app.services.errors import DomainError
+from app.services.identity import IdentityProvider, build_identity_provider
+from app.services.rate_limit import SlidingWindowRateLimiter
 from app.storage import Storage, build_storage
 
 MAX_WORKERS_MESSAGE = (
@@ -52,6 +54,7 @@ def create_app(
     storage: Storage | None = None,
     verifier: JwtVerifier | None = None,
     audit: AuditService | None = None,
+    identity: IdentityProvider | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
 
@@ -70,6 +73,10 @@ def create_app(
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.storage = storage or build_storage(settings)
+    app.state.identity = identity or build_identity_provider(settings)
+    app.state.invite_limiter = SlidingWindowRateLimiter(
+        settings.invite_rate_limit_per_minute, 60.0
+    )
 
     # Local development auth (HS256 + /dev/token) is selected only when no
     # verifier is injected and dev auth is explicitly active outside production.
@@ -85,6 +92,8 @@ def create_app(
     app.include_router(me.router)
     app.include_router(quarries.router)
     app.include_router(documents.router)
+    app.include_router(platform.router)
+    app.include_router(company_admin.router)
     if dev_mode:
         app.include_router(dev.router)
 

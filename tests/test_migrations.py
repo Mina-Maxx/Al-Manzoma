@@ -23,6 +23,7 @@ def test_schema_created_by_migrations(engine, _database):
         "documents",
         "idempotency_keys",
         "memberships",
+        "platform_admins",
         "quarries",
         "quarry_permissions",
         "users",

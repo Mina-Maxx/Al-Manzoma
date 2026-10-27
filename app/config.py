@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     supabase_jwt_algorithms: str = "RS256,ES256"
     jwks_cache_ttl_seconds: int = 3600
 
+    # Supabase service-role key. Backend-only, never logged, never sent to any
+    # client. Required only for employee invitations (Admin API).
+    supabase_service_role_key: str = ""
+
     max_file_size_bytes: int = 10 * 1024 * 1024
     default_company_quota_bytes: int = 5 * 1024 * 1024 * 1024
     default_company_max_users: int = 10
@@ -45,6 +49,10 @@ class Settings(BaseSettings):
     # so the backend MUST run as a single worker in a single instance. The app
     # refuses to start when this is greater than 1 (see app/main.py).
     web_concurrency: int = 1
+
+    # Rate limit for the employee-invitation endpoint (per company+actor, per
+    # minute). In-process: valid because the backend is single-instance.
+    invite_rate_limit_per_minute: int = 10
 
     storage_backend: str = "local"
     storage_local_root: str = "./.storage"

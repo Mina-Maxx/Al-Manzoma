@@ -160,7 +160,14 @@ def storage(settings, _storage_root):
 
 
 @pytest.fixture
-def app(settings, session_factory, storage, verifier):
+def identity():
+    from tests.fakes import FakeIdentityProvider
+
+    return FakeIdentityProvider()
+
+
+@pytest.fixture
+def app(settings, session_factory, storage, verifier, identity):
     from app.main import create_app
 
     return create_app(
@@ -168,6 +175,7 @@ def app(settings, session_factory, storage, verifier):
         session_factory=session_factory,
         storage=storage,
         verifier=verifier,
+        identity=identity,
     )
 
 

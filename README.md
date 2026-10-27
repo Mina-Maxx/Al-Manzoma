@@ -1,11 +1,13 @@
-# QuarryVault — Backend (Slice 1A)
+# QuarryVault — Backend
 
 Multi-tenant document archive for quarry companies. This is the FastAPI backend
 only. The backend is the single authority for authorization: clients never talk
 to the database or to Google Drive directly.
 
-Scope of this slice: login (Supabase JWT) → upload → download, with Google Drive
-as the file store behind a storage interface.
+Delivered so far: login (Supabase JWT) → upload → download with Google Drive as
+the file store behind a storage interface, plus the **management API**: platform
+admins manage companies, and company admins manage their users, quarries and
+permissions.
 
 ## Architecture
 
@@ -16,29 +18,35 @@ app/
   main.py            app factory, routers, error handlers
   config.py          environment-based settings (pydantic-settings)
   db.py              SQLAlchemy engine/session factory
-  models/            companies, users, memberships, quarries, quarry_permissions,
-                     documents, idempotency_keys, audit_events
+  models/            companies, users, memberships, platform_admins, quarries,
+                     quarry_permissions, documents, idempotency_keys, audit_events
   schemas.py         request/response models
   security/
     jwt.py           Supabase JWT verification via JWKS (cached)
-    context.py       AuthContext (server-derived identity + tenancy)
-    deps.py          get_auth_context, require_quarry_permission, download guard
+    context.py       AuthContext / PlatformAdminContext (server-derived identity)
+    deps.py          get_auth_context, require_company_admin, get_platform_admin,
+                     require_quarry_permission, download guard
   services/
     document_service.py  upload orchestrator (idempotency, quota, storage)
     quota.py             transactional quota reservation (row lock)
     idempotency.py       idempotency key helpers
     audit.py             isolated audit writes (sanitized)
     reconciliation.py    detection hook for stuck/orphan documents
+    identity.py          swappable IdentityProvider (Supabase Admin API)
+    platform_admin.py    company create/list/suspend/reactivate
+    company_admin.py     users, invitations, quarries, permissions, usage
+    rate_limit.py        in-process sliding-window limiter (invitations)
   storage/
     base.py          Storage interface: put / open / delete / exists
     local.py         LocalDiskStorage (tests/dev only)
     gdrive.py        GoogleDriveStorage (pilot)
-  routers/           health, me, quarries, documents
+  routers/           health, me, quarries, documents, platform, company_admin
   scripts/           operational CLIs (python -m app.scripts.reap / .orphans)
 alembic/             migrations
 scripts/
   gdrive_oauth.py    one-time local refresh-token helper
   seed_dev.py        development seed data (no real secrets)
+  bootstrap.py       production bootstrap (first platform admin + company)
 tests/               pytest suite
 ```
 
@@ -53,6 +61,11 @@ tests/               pytest suite
   `quarry_permissions` row. There is no implicit access to all quarries.
 - **`company_id` is always derived server-side** from the caller's membership
   row, never from the client or from JWT claims.
+- **Platform admins are separate**: `platform_admins` holds operators who are
+  deliberately *not* members of any company. An identity is never both a
+  platform admin and a company member; the bootstrap script enforces this.
+- **Roles live only in our tables**, never in JWT claims. The backend re-reads
+  membership and status on every request.
 
 ## Endpoints
 
@@ -60,10 +73,38 @@ tests/               pytest suite
 | --- | --- | --- |
 | GET | `/health` | no auth |
 | GET | `/me` | user + company + role (+ used bytes) |
-| GET | `/quarries` | only quarries with `can_view` |
+| GET | `/quarries` | only active quarries with `can_view` |
 | GET | `/quarries/{id}/documents` | only `available` documents, paginated |
 | POST | `/quarries/{id}/documents` | multipart upload, requires `Idempotency-Key` |
 | GET | `/documents/{id}/download` | streamed through the backend |
+
+### Platform admin (`/platform`, platform admins only)
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/platform/companies` | list companies (+ usage) |
+| POST | `/platform/companies` | create a company |
+| POST | `/platform/companies/{id}/suspend` | suspend a company |
+| POST | `/platform/companies/{id}/reactivate` | reactivate a company |
+
+### Company admin (`/company`, company admins only)
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/company/users` | list users + status |
+| POST | `/company/users/invite` | invite by email (rate limited); never exceeds `max_users` |
+| POST | `/company/users/{id}/disable` | disable a user (last-admin protected) |
+| POST | `/company/users/{id}/enable` | re-enable a user |
+| GET | `/company/quarries` | list quarries (incl. inactive) |
+| POST | `/company/quarries` | create a quarry |
+| POST | `/company/quarries/{id}/deactivate` | deactivate a quarry |
+| POST | `/company/quarries/{id}/reactivate` | reactivate a quarry |
+| GET | `/company/quarries/{id}/permissions` | permission matrix |
+| PUT | `/company/quarries/{id}/permissions/{user_id}` | set a user's flags |
+| GET | `/company/usage` | quota usage from the same source as uploads |
+
+Deactivating a quarry makes it invisible to its members and blocks listing,
+upload and download (all return **404**).
 
 ## Setup
 
@@ -77,7 +118,10 @@ copy .env.example .env            # then fill in real values
 
 Required environment (see `.env.example`): `DATABASE_URL`, `SUPABASE_URL`,
 `STORAGE_BACKEND` (`local` or `gdrive`) and, for Drive, `GDRIVE_ROOT_FOLDER_ID`
-and `GDRIVE_CREDENTIALS_FILE`.
+and `GDRIVE_CREDENTIALS_FILE`. Management features additionally need
+`SUPABASE_SERVICE_ROLE_KEY` (backend-only: it is used to create/disable auth
+users and is never logged or sent to clients) and optionally
+`INVITE_RATE_LIMIT_PER_MINUTE`.
 
 ### Migrations
 
@@ -96,6 +140,24 @@ uvicorn app.main:app --reload
 ```bash
 python scripts/seed_dev.py        # one company, users, quarries, permissions
 ```
+
+### Bootstrap (production)
+
+On a fresh deployment there are no platform admins, so nobody can use
+`/platform`. Run the bootstrap once to create the first platform admin, the
+first company and that company's first company admin:
+
+```bash
+python scripts/bootstrap.py \
+  --platform-admin-email root@example.com \
+  --company-name "Acme Quarry" \
+  --company-admin-email owner@example.com
+```
+
+Passing `--auth-user-id` instead of `--email` reuses an existing account without
+inviting anyone. The script refuses if the identity is ambiguous (already a
+platform admin, already in a company, or both admins are the same person) and
+contains no secrets.
 
 ## Storage
 
@@ -197,7 +259,11 @@ between tests. Covered: tenant isolation on every endpoint, missing/invalid
 tokens, inactive user, suspended company, per-quarry permissions, bad magic
 bytes, oversize/over-quota uploads, idempotency (same key once; same key +
 different content → 409), concurrent uploads near the quota, reconciliation
-candidates, and the local storage interface.
+candidates, and the local storage interface. The management API adds: the
+identity provider, platform company management, company users/quarries/
+permissions/usage, invitation limits (rate limit, `max_users`, retry/dedup,
+compensation), last-admin protection, inactive-quarry visibility, and real
+PostgreSQL concurrency tests for concurrent invites and concurrent disables.
 
 ## Reconciliation and stale-attempt recovery
 
@@ -268,8 +334,8 @@ uvicorn app.main:app
 Do not scale the API to multiple replicas. This restriction is a hard
 requirement of the current design, not a tuning knob.
 
-## Out of scope (this slice)
+## Out of scope (so far)
 
-Android app, admin dashboard, company/user management endpoints, versions,
-trash, search, export, sharing links, OCR, billing, background workers, RLS
+Android app, admin dashboard, deleting records, search, export, sharing links,
+versions/trash, OCR, notifications, reports, billing, background workers, RLS
 policies, deployment.

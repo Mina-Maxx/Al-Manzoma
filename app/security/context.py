@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.models import Company, Membership, MembershipRole, User
+from app.models import Company, Membership, MembershipRole, PlatformAdmin, User
 
 
 @dataclass(frozen=True)
@@ -29,3 +29,23 @@ class AuthContext:
     @property
     def role(self) -> MembershipRole:
         return self.membership.role
+
+
+@dataclass(frozen=True)
+class PlatformAdminContext:
+    """Server-derived identity for a platform operator.
+
+    Platform admins have no company and no membership; they can only reach the
+    platform management endpoints.
+    """
+
+    admin: PlatformAdmin
+    claims: dict
+
+    @property
+    def admin_id(self):
+        return self.admin.id
+
+    @property
+    def auth_user_id(self) -> str:
+        return self.admin.auth_user_id

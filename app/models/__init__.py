@@ -15,6 +15,7 @@ from app.models.enums import (
 )
 from app.models.idempotency import IdempotencyKey
 from app.models.membership import Membership
+from app.models.platform_admin import PlatformAdmin
 from app.models.quarry import Quarry
 from app.models.quarry_permission import QuarryPermission
 from app.models.user import User
@@ -31,6 +32,7 @@ __all__ = [
     "IdempotencyStatus",
     "Membership",
     "MembershipRole",
+    "PlatformAdmin",
     "Quarry",
     "QuarryPermission",
     "QuarryStatus",

@@ -9,6 +9,7 @@ from app.models import (
     DocumentStatus,
     Membership,
     MembershipRole,
+    PlatformAdmin,
     Quarry,
     QuarryPermission,
     QuarryStatus,
@@ -131,6 +132,24 @@ def provision_user(
         can_download=can_download,
     )
     return user, company, quarry, permission
+
+
+def make_platform_admin(
+    db,
+    *,
+    auth_user_id: str | None = None,
+    email: str | None = None,
+    status: UserStatus = UserStatus.active,
+) -> PlatformAdmin:
+    admin = PlatformAdmin(
+        auth_user_id=auth_user_id or f"pa-{uuid.uuid4().hex}",
+        email=email or f"{uuid.uuid4().hex[:8]}@platform.test",
+        full_name="Platform Admin",
+        status=status,
+    )
+    db.add(admin)
+    db.commit()
+    return admin
 
 
 def make_document(

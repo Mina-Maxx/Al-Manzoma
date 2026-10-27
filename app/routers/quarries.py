@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Quarry, QuarryPermission
+from app.models import Quarry, QuarryPermission, QuarryStatus
 from app.schemas import QuarryOut, QuarryPermissionOut
 from app.security.context import AuthContext
 from app.security.deps import get_auth_context, get_db
@@ -22,6 +22,7 @@ def list_quarries(
         .join(QuarryPermission, QuarryPermission.quarry_id == Quarry.id)
         .where(
             Quarry.company_id == ctx.company_id,
+            Quarry.status == QuarryStatus.active,
             QuarryPermission.user_id == ctx.user_id,
             QuarryPermission.can_view.is_(True),
         )
