@@ -52,6 +52,7 @@ class DocumentOut(BaseModel):
 
     id: uuid.UUID
     quarry_id: uuid.UUID
+    folder_id: uuid.UUID | None
     display_name: str
     original_filename: str
     mime_type: str
@@ -64,6 +65,34 @@ class DocumentOut(BaseModel):
 
 class ErrorOut(BaseModel):
     detail: str
+
+
+# --- Folders ----------------------------------------------------------------
+
+
+class FolderCreate(BaseModel):
+    name: str
+    parent_id: uuid.UUID | None = None
+
+
+class FolderRename(BaseModel):
+    name: str
+
+
+class FolderOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    quarry_id: uuid.UUID
+    parent_id: uuid.UUID | None
+    name: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class DocumentMove(BaseModel):
+    # Omitted or null both mean "move to root/unfiled".
+    folder_id: uuid.UUID | None = None
 
 
 # --- Management API ---------------------------------------------------------

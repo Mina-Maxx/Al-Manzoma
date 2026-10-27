@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.models import AuditResult, Document, DocumentStatus, Quarry
-from app.schemas import DocumentOut
+from app.schemas import DocumentMove, DocumentOut
 from app.security.context import AuthContext
 from app.security.deps import (
     get_auth_context,
@@ -34,6 +34,7 @@ from app.security.deps import (
     get_storage,
     require_quarry_permission,
 )
+from app.services import folders as folder_service
 from app.services.audit import AuditService
 from app.services.document_service import upload_document
 from app.services.errors import DomainError
@@ -69,15 +70,37 @@ def list_documents(
     db: Session = Depends(get_db),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    folder_id: uuid.UUID | None = Query(default=None),
+    root_only: bool = Query(default=False),
 ) -> list[DocumentOut]:
-    rows = db.execute(
-        select(Document)
-        .where(
-            Document.company_id == ctx.company_id,
-            Document.quarry_id == quarry.id,
-            Document.status == DocumentStatus.available,
+    """List available documents in a quarry.
+
+    Without ``folder_id``/``root_only`` the whole quarry is returned (existing
+    behaviour). ``folder_id`` filters one folder; ``root_only=true`` returns
+    unfiled documents (``folder_id IS NULL``, including pre-folder documents).
+    """
+    if folder_id is not None and root_only:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="folder_id and root_only are mutually exclusive",
         )
-        .order_by(Document.created_at.desc())
+    if folder_id is not None:
+        folder_service.get_folder_in_quarry(
+            db, ctx.company_id, quarry.id, folder_id
+        )
+
+    statement = select(Document).where(
+        Document.company_id == ctx.company_id,
+        Document.quarry_id == quarry.id,
+        Document.status == DocumentStatus.available,
+    )
+    if folder_id is not None:
+        statement = statement.where(Document.folder_id == folder_id)
+    elif root_only:
+        statement = statement.where(Document.folder_id.is_(None))
+
+    rows = db.execute(
+        statement.order_by(Document.created_at.desc())
         .limit(limit)
         .offset(offset)
     ).scalars().all()
@@ -90,6 +113,7 @@ def upload_document_endpoint(
     response: Response,
     file: UploadFile = File(...),
     display_name: str | None = Form(default=None),
+    folder_id: uuid.UUID | None = Form(default=None),
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
     quarry: Quarry = Depends(require_quarry_permission("can_upload")),
     ctx: AuthContext = Depends(get_auth_context),
@@ -108,6 +132,7 @@ def upload_document_endpoint(
             upload_file=file,
             idempotency_key=idempotency_key,
             display_name=display_name,
+            folder_id=folder_id,
         )
     except DomainError as exc:
         audit.record(
@@ -131,6 +156,40 @@ def upload_document_endpoint(
         target_type="document",
         target_id=document.id,
         meta={"size_bytes": document.size_bytes, "created": created},
+        request=request,
+    )
+    return DocumentOut.model_validate(document)
+
+
+@router.patch(
+    "/quarries/{quarry_id}/documents/{document_id}", response_model=DocumentOut
+)
+def move_document_endpoint(
+    document_id: uuid.UUID,
+    body: DocumentMove,
+    request: Request,
+    quarry: Quarry = Depends(require_quarry_permission("can_upload")),
+    ctx: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+    audit: AuditService = Depends(get_audit),
+) -> DocumentOut:
+    """Move a document within the same quarry; ``folder_id: null`` = root."""
+    document, previous_folder_id = folder_service.move_document(
+        db, ctx.company_id, quarry.id, document_id, body.folder_id
+    )
+    audit.record(
+        action="document.move",
+        result=AuditResult.success,
+        company_id=ctx.company_id,
+        actor_user_id=ctx.user_id,
+        target_type="document",
+        target_id=document.id,
+        meta={
+            "from_folder_id": (
+                str(previous_folder_id) if previous_folder_id else None
+            ),
+            "to_folder_id": str(document.folder_id) if document.folder_id else None,
+        },
         request=request,
     )
     return DocumentOut.model_validate(document)

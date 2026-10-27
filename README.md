@@ -68,6 +68,10 @@ tests/               pytest suite
   platform admin and a company member; the bootstrap script enforces this.
 - **Roles live only in our tables**, never in JWT claims. The backend re-reads
   membership and status on every request.
+- **Documents are organized with folders**: `folders` belong to one quarry and
+  may be nested via `parent_id`. Names are unique per parent, case-insensitively.
+  `documents.folder_id` is **nullable**: documents uploaded before folders (and
+  documents placed at the root) remain visible in the quarry root listing.
 
 ## Endpoints
 
@@ -76,8 +80,13 @@ tests/               pytest suite
 | GET | `/health` | no auth |
 | GET | `/me` | user + company + role (+ used bytes) |
 | GET | `/quarries` | only active quarries with `can_view` |
-| GET | `/quarries/{id}/documents` | only `available` documents, paginated |
-| POST | `/quarries/{id}/documents` | multipart upload, requires `Idempotency-Key` |
+| GET | `/quarries/{id}/documents` | only `available` documents, paginated; optional `folder_id` or `root_only` |
+| POST | `/quarries/{id}/documents` | multipart upload (+ optional `folder_id`), requires `Idempotency-Key` |
+| PATCH | `/quarries/{id}/documents/{document_id}` | move a document (`folder_id: null` = root) |
+| GET | `/quarries/{id}/folders` | flat folder list; `parent_id` rebuilds the tree |
+| POST | `/quarries/{id}/folders` | create a folder (requires `can_upload`) |
+| PATCH | `/quarries/{id}/folders/{folder_id}` | rename a folder (requires `can_upload`) |
+| DELETE | `/quarries/{id}/folders/{folder_id}` | delete an empty folder (requires `can_upload`) |
 | GET | `/documents/{id}/download` | streamed through the backend |
 | GET | `/dashboard/config` | **public** dashboard config (URL + anon key only) |
 | GET | `/dashboard/` | the static admin dashboard |
@@ -343,9 +352,42 @@ Files are private: the backend never creates public links or "anyone with the
 link" permissions. Retryable Drive failures (429/5xx) use exponential backoff and
 surface a generic error to the client; Google error details are never exposed.
 
+## Folders and document organization
+
+- **Scope**: folders are per quarry. Listing requires `can_view`; creating,
+  renaming, deleting a folder and moving a document require `can_upload`. There
+  is no `can_manage` flag, and platform admins get **403** on tenant endpoints
+  like everywhere else.
+- **Listing is flat**: `GET /quarries/{id}/folders` returns every folder in the
+  quarry with its `parent_id`; clients build the tree. No recursive SQL.
+- **Uniqueness**: names are trimmed and compared case-insensitively within the
+  same parent (two `Plans` at the root, or `Plans` under two different parents,
+  are fine). Duplicates return **409**. The database enforces this with partial
+  unique expression indexes, so concurrent creates cannot race past the check.
+- **Deletion is empty-only**: deleting a folder with documents or child folders
+  returns **409** (`folder is not empty`). Deleting a tree means walking it
+  bottom-up. Documents are never deleted implicitly.
+- **Root/unfiled**: `GET .../documents?root_only=true` returns
+  `folder_id IS NULL`, which includes every document uploaded before folders
+  existed. `GET .../documents` without filters keeps its old, whole-quarry
+  behaviour. `folder_id` and `root_only` together are **422**.
+- **Moving** is metadata-only: storage object, SHA-256 and bytes are untouched
+  (read-only storage contract preserved), and the same download path keeps
+  working. Moving across quarries or companies returns **404**.
+- **No folder-move endpoint** in this slice, so a folder cannot be reparented and
+  cycles are impossible. Moving a document to an id from another quarry/company
+  returns **404**.
+- **Audit**: `folder.create`, `folder.rename`, `folder.delete` and
+  `document.move` are recorded with ids only (no names or file contents).
+
 ## Upload semantics
 
 1. **Authorize first** (`can_upload` on that quarry within the caller's company).
+   An optional `folder_id` is resolved under a row lock in the same quarry while
+   reserving quota; a foreign or missing folder is **404** with no document, no
+   stored object and no quota change. Because the folder is only checked when a
+   new reservation is needed, an idempotent retry still returns its original
+   document (and original folder) unchanged.
 2. Stream the file in chunks to a spooled temp file, enforcing the size limit on
    the actual bytes (not the client's `Content-Length`) and computing SHA-256.
 3. Detect the real type by magic bytes (PDF, JPEG, PNG only) and reject mismatch.
@@ -375,8 +417,11 @@ company returns **404, not 403**.
 - User and company status are read from the database on **every** request, with
   no caching, so deactivating a user or suspending a company blocks the next
   request.
-- Cross-tenant access by changing any id returns 404.
+- Cross-tenant access by changing any id returns 404, including folder ids and
+  a document move's target `folder_id`.
 - Client-supplied `company_id` is never trusted.
+- Folder names are unique per parent under a database-enforced partial unique
+  index, so a check-then-insert race still ends in **409**, not duplicates.
 - Platform admins are **not** company members: every tenant endpoint (quarries,
   documents, downloads, `/company/*`) rejects them with **403**. Authorization
   for tenant data is always derived from a membership row.
@@ -425,7 +470,13 @@ compensation), last-admin protection, inactive-quarry visibility, and real
 PostgreSQL concurrency tests for concurrent invites and concurrent disables. The
 dashboard adds tests that `/dashboard/config` exposes only public values (never
 the service-role key) and that the static assets and auth-callback pages are
-served.
+served. Folders add: nested CRUD, empty-only deletion, case-insensitive duplicate
+rejection (including a concurrent-create race), cross-quarry/cross-company 404s,
+`can_view`/`can_upload` enforcement for every folder action, document move with
+unchanged storage ref/hash/download bytes, upload into a folder, root listings
+and the `folder_id`/`root_only` mutual exclusion; the migration test also asserts
+the folder columns, foreign-key delete rules, partial unique indexes,
+`documents.folder_id` nullability, and its index so existing rows stay at the root.
 
 ## Reconciliation and stale-attempt recovery
 

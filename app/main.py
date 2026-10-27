@@ -12,6 +12,7 @@ from app.routers import (
     dashboard,
     dev,
     documents,
+    folders,
     health,
     me,
     platform,
@@ -100,6 +101,7 @@ def create_app(
     app.include_router(health.router)
     app.include_router(me.router)
     app.include_router(quarries.router)
+    app.include_router(folders.router)
     app.include_router(documents.router)
     app.include_router(platform.router)
     app.include_router(company_admin.router)

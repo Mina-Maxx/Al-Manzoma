@@ -7,6 +7,7 @@ from app.models import (
     CompanyStatus,
     Document,
     DocumentStatus,
+    Folder,
     Membership,
     MembershipRole,
     PlatformAdmin,
@@ -79,6 +80,25 @@ def make_quarry(
     db.add(quarry)
     db.commit()
     return quarry
+
+
+def make_folder(
+    db,
+    company: Company,
+    quarry: Quarry,
+    *,
+    name: str = "Plans",
+    parent: Folder | None = None,
+) -> Folder:
+    folder = Folder(
+        company_id=company.id,
+        quarry_id=quarry.id,
+        parent_id=parent.id if parent is not None else None,
+        name=name,
+    )
+    db.add(folder)
+    db.commit()
+    return folder
 
 
 def make_permission(
@@ -161,10 +181,12 @@ def make_document(
     size_bytes: int = 1024,
     storage_ref: str | None = "ref-123",
     uploaded_by: uuid.UUID | None = None,
+    folder_id: uuid.UUID | None = None,
 ) -> Document:
     document = Document(
         company_id=company.id,
         quarry_id=quarry.id,
+        folder_id=folder_id,
         display_name="doc.pdf",
         original_filename="doc.pdf",
         mime_type="application/pdf",

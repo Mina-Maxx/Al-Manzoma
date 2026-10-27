@@ -192,6 +192,7 @@ def _ensure_pending_document(
     display_name: str | None,
     original_filename: str,
     attempt: _Attempt,
+    folder_id: uuid.UUID | None = None,
 ) -> Document:
     """Reuse a crashed attempt's pending document, or reserve a new one (T2)."""
     if attempt.document_id is not None:
@@ -224,6 +225,7 @@ def _ensure_pending_document(
             size_bytes=streamed.size_bytes,
             sha256=streamed.sha256,
             uploaded_by=ctx.user_id,
+            folder_id=folder_id,
         )
         db.flush()
         fresh.document_id = document.id
@@ -395,8 +397,16 @@ def upload_document(
     upload_file,
     idempotency_key: str,
     display_name: str | None,
+    folder_id: uuid.UUID | None = None,
 ) -> tuple[Document, bool]:
-    """Orchestrate an authorized upload. Returns (document, created)."""
+    """Orchestrate an authorized upload. Returns (document, created).
+
+    ``folder_id`` is validated under a row lock when the pending document is
+    reserved, so a foreign folder returns 404 before any row is inserted. Row
+    locking (not an up-front check) also lets an idempotent retry return its
+    original document unchanged, even if the originally requested folder was
+    deleted since, and never re-files an existing document.
+    """
     original_filename = sanitize_filename(upload_file.filename or "")
     if extension_of(upload_file.filename or "") not in ALLOWED_EXTENSIONS:
         raise InvalidFileType("file extension is not allowed")
@@ -429,6 +439,7 @@ def upload_document(
                 display_name,
                 original_filename,
                 attempt,
+                folder_id,
             )
             return _complete_attempt(
                 db, storage, ctx, quarry, streamed, attempt, document

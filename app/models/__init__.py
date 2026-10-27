@@ -13,6 +13,7 @@ from app.models.enums import (
     QuarryStatus,
     UserStatus,
 )
+from app.models.folder import Folder
 from app.models.idempotency import IdempotencyKey
 from app.models.membership import Membership
 from app.models.platform_admin import PlatformAdmin
@@ -28,6 +29,7 @@ __all__ = [
     "CompanyStatus",
     "Document",
     "DocumentStatus",
+    "Folder",
     "IdempotencyKey",
     "IdempotencyStatus",
     "Membership",

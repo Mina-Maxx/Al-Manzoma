@@ -27,6 +27,11 @@ class Document(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     quarry_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("quarries.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    # ``None`` means root/unfiled. The service validates that a non-null folder
+    # belongs to the same company and quarry as the document.
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("folders.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
