@@ -1,0 +1,222 @@
+# QuarryVault — Backend (Slice 1A)
+
+Multi-tenant document archive for quarry companies. This is the FastAPI backend
+only. The backend is the single authority for authorization: clients never talk
+to the database or to Google Drive directly.
+
+Scope of this slice: login (Supabase JWT) → upload → download, with Google Drive
+as the file store behind a storage interface.
+
+## Architecture
+
+Modular monolith:
+
+```
+app/
+  main.py            app factory, routers, error handlers
+  config.py          environment-based settings (pydantic-settings)
+  db.py              SQLAlchemy engine/session factory
+  models/            companies, users, memberships, quarries, quarry_permissions,
+                     documents, idempotency_keys, audit_events
+  schemas.py         request/response models
+  security/
+    jwt.py           Supabase JWT verification via JWKS (cached)
+    context.py       AuthContext (server-derived identity + tenancy)
+    deps.py          get_auth_context, require_quarry_permission, download guard
+  services/
+    document_service.py  upload orchestrator (idempotency, quota, storage)
+    quota.py             transactional quota reservation (row lock)
+    idempotency.py       idempotency key helpers
+    audit.py             isolated audit writes (sanitized)
+    reconciliation.py    detection hook for stuck/orphan documents
+  storage/
+    base.py          Storage interface: put / open / delete / exists
+    local.py         LocalDiskStorage (tests/dev only)
+    gdrive.py        GoogleDriveStorage (pilot)
+  routers/           health, me, quarries, documents
+alembic/             migrations
+scripts/
+  gdrive_oauth.py    one-time local refresh-token helper
+  seed_dev.py        development seed data (no real secrets)
+tests/               pytest suite
+```
+
+### Data model notes
+
+- **Multi-tenant from the start**: `company_id` is present on all tenant data.
+- **Identity is separate from membership**: `users` holds a profile row linked
+  to the Supabase auth user id (`auth_user_id`); `memberships` links a user to a
+  company with a role (`company_admin` or `employee`). One membership per user in
+  the MVP.
+- **Quarry access is explicit**: a user only sees a quarry through a
+  `quarry_permissions` row. There is no implicit access to all quarries.
+- **`company_id` is always derived server-side** from the caller's membership
+  row, never from the client or from JWT claims.
+
+## Endpoints
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/health` | no auth |
+| GET | `/me` | user + company + role (+ used bytes) |
+| GET | `/quarries` | only quarries with `can_view` |
+| GET | `/quarries/{id}/documents` | only `available` documents, paginated |
+| POST | `/quarries/{id}/documents` | multipart upload, requires `Idempotency-Key` |
+| GET | `/documents/{id}/download` | streamed through the backend |
+
+## Setup
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate            # Windows
+pip install -r requirements.txt -r requirements-dev.txt
+
+copy .env.example .env            # then fill in real values
+```
+
+Required environment (see `.env.example`): `DATABASE_URL`, `SUPABASE_URL`,
+`STORAGE_BACKEND` (`local` or `gdrive`) and, for Drive, `GDRIVE_ROOT_FOLDER_ID`
+and `GDRIVE_CREDENTIALS_FILE`.
+
+### Migrations
+
+```bash
+alembic upgrade head
+```
+
+### Run
+
+```bash
+uvicorn app.main:app --reload
+```
+
+### Seed (development only)
+
+```bash
+python scripts/seed_dev.py        # one company, users, quarries, permissions
+```
+
+## Storage
+
+`Storage` is a small interface:
+
+```python
+put(stream, name) -> ref
+open(ref) -> stream
+delete(ref)
+exists(ref)
+```
+
+`name` is a logical key (`company/{company_id}/quarry/{quarry_id}/{document_id}`)
+built from IDs only, never user-supplied names. The database stores the returned
+Drive **file id** as the source of truth, never a filename.
+
+Two implementations: `GoogleDriveStorage` (pilot) and `LocalDiskStorage` (tests
+and local development only).
+
+### Google Drive setup
+
+1. Create an OAuth client (Desktop app) in Google Cloud and enable the Drive API.
+2. Set the OAuth consent screen to **In production**. In *Testing* mode Google
+   expires refresh tokens after **7 days**, which would silently break uploads.
+3. Run the one-time helper on the owner's machine:
+   ```bash
+   python scripts/gdrive_oauth.py --client-secret client_secret.json --out gdrive_credentials.json
+   ```
+   Scope is `drive.file` only — the backend can only see files it created itself.
+4. Move `gdrive_credentials.json` into secret storage and point
+   `GDRIVE_CREDENTIALS_FILE` at it. Never commit it.
+5. Create the app root folder in Drive and set `GDRIVE_ROOT_FOLDER_ID`.
+   Per-company and per-quarry folders are created automatically using IDs.
+
+Files are private: the backend never creates public links or "anyone with the
+link" permissions. Retryable Drive failures (429/5xx) use exponential backoff and
+surface a generic error to the client; Google error details are never exposed.
+
+## Upload semantics
+
+1. **Authorize first** (`can_upload` on that quarry within the caller's company).
+2. Stream the file in chunks to a spooled temp file, enforcing the size limit on
+   the actual bytes (not the client's `Content-Length`) and computing SHA-256.
+3. Detect the real type by magic bytes (PDF, JPEG, PNG only) and reject mismatch.
+4. **Reserve quota in a short transaction**: lock the company row
+   (`SELECT ... FOR UPDATE`), count `pending` + `available` bytes, insert a
+   `pending` document, commit and release the lock. Pending rows count toward the
+   quota, so concurrent uploads cannot oversell it.
+5. Upload to Drive **outside the lock**.
+6. Mark the document `available` with the Drive file id and SHA-256. Users only
+   ever see `available` documents.
+7. On Drive failure the reservation is released. If Drive succeeds but the DB
+   update fails, the row stays `pending` for reconciliation.
+
+**Idempotency**: the `Idempotency-Key` header plus the content hash makes a retry
+return the same document. Reusing a key with different content returns `409`.
+
+## Download semantics
+
+Authorize `can_download` on the document's quarry, then stream from Drive through
+the backend with `Content-Disposition: attachment`, `X-Content-Type-Options:
+nosniff`, and `Cache-Control: private, no-store`. A document id from another
+company returns **404, not 403**.
+
+## Security properties
+
+- Supabase JWT verified against JWKS (issuer + audience + expiry).
+- User and company status are read from the database on **every** request, with
+  no caching, so deactivating a user or suspending a company blocks the next
+  request.
+- Cross-tenant access by changing any id returns 404.
+- Client-supplied `company_id` is never trusted.
+- Audit events record auth outcomes, upload success/failure, downloads and
+  authorization denials. Tokens, passwords and file contents are never logged or
+  recorded (audit metadata is sanitized).
+
+## Tests
+
+Tests run against a **real PostgreSQL** database (no skipping of concurrency
+tests). Point `TEST_DATABASE_URL` at a throwaway database:
+
+```bash
+docker run -d --name quarryvault-pg \
+  -e POSTGRES_USER=quarryvault -e POSTGRES_PASSWORD=quarryvault \
+  -e POSTGRES_DB=quarryvault_test -p 55432:5432 postgres:16
+
+set TEST_DATABASE_URL=postgresql+psycopg://quarryvault:quarryvault@localhost:55432/quarryvault_test
+pytest
+```
+
+The suite resets the schema and applies Alembic migrations, then truncates tables
+between tests. Covered: tenant isolation on every endpoint, missing/invalid
+tokens, inactive user, suspended company, per-quarry permissions, bad magic
+bytes, oversize/over-quota uploads, idempotency (same key once; same key +
+different content → 409), concurrent uploads near the quota, reconciliation
+candidates, and the local storage interface.
+
+## Reconciliation and stale-attempt recovery
+
+`app.services.reconciliation.list_reconciliation_candidates(db, older_than_seconds)`
+lists documents stuck in a non-final state. `reason` is `upload_incomplete`
+(no Drive ref) or `orphan_in_drive` (Drive ref present).
+
+`reap_stale_attempts(db, ...)` releases reservations for uploads that crashed
+while an idempotency key was `in_progress`. A candidate is an `in_progress` key
+with no recorded failure whose lease has expired and which has no live owner in
+the process-local registry (`app/services/owner_registry.py`). Each candidate is
+re-checked under a row lock and taken over with an owner-token CAS before its
+pending reservation is released and it is marked failed (`failed_at`). The
+reaper never deletes storage objects; the key's `storage_ref` is preserved for
+recovery attribution.
+
+Because the active-owner registry is **process-local**, it is only correct for a
+single Uvicorn process. It is not a cross-process liveness authority; a
+multi-worker deployment would need a shared mechanism (e.g. advisory locks).
+PostgreSQL and the storage backend are also not one transaction: an object
+written just before a crash cannot always be attributed, so it is left in place
+(residual orphan risk). No scheduler or background worker is built in this
+slice; the reaper is called explicitly.
+
+## Out of scope (this slice)
+
+Android app, admin dashboard, company/user management endpoints, versions,
+trash, search, export, sharing links, OCR, billing, background workers, RLS
+policies, deployment.
