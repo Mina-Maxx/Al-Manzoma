@@ -173,6 +173,26 @@ email (see the dashboard section below). The script refuses if the identity is
 ambiguous (already a platform admin, already in a company, or both admins are
 the same person) and contains no secrets.
 
+### Live smoke test (real services)
+
+With a running backend and a real Supabase project, you can exercise the whole
+path against the real services. It prints **no secrets or tokens**, and only
+reports PASS/FAIL per step:
+
+```bash
+python scripts/smoke_real.py \
+  --email employee@example.com --password '...' \
+  --quarry-id <uuid> --other-quarry-id <uuid>
+```
+
+It (1) signs an employee in through Supabase Auth, (2) calls `GET /me`,
+(3) uploads a tiny PDF, (4) downloads it and compares SHA-256, and (5) tries to
+read a quarry from another company (expects 404). Inputs can also come from the
+environment (`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SMOKE_EMAIL`, `SMOKE_PASSWORD`,
+`SMOKE_QUARRY_ID`, `SMOKE_OTHER_QUARRY_ID`, `SMOKE_BASE_URL`). The employee must
+already hold `can_view` + `can_upload` + `can_download` on `--quarry-id`; the
+script does not create permissions.
+
 ## Admin dashboard
 
 A small static dashboard is served by the backend at **`/dashboard/`** (for
