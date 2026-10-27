@@ -193,6 +193,58 @@ framework: plain ES modules in `app/dashboard/`.
   view (employees, invitations, quarries, permissions, usage) for company
   admins. Employees see a "no access" notice.
 
+### Decision: static dashboard instead of Next.js + TypeScript (MVP)
+
+**Decision.** For the MVP the dashboard is plain static HTML/CSS/ES-modules
+served by the backend, not a Next.js + TypeScript app.
+
+**Why.**
+- **No build step and no Node toolchain at build/deploy time.** The whole
+  backend ships as Python; adding Next.js would add a second toolchain, a
+  bundler and a second deploy target for zero functional gain here.
+- **Same-origin.** Serving `/dashboard` from the API removes CORS, a second
+  hostname and a second set of cookies/tokens to reason about.
+- **Small surface.** The dashboard only talks to Supabase Auth and this API;
+  it needs no SSR, routing, data fetching layer or component framework.
+
+**Limits (accepted for the MVP).**
+- **No type safety.** No TypeScript, so mistakes in the client are only caught by
+  review and the checks below — not by the compiler.
+- **No automated tests for the JS logic.** The DOM wiring in `app/dashboard/app.js`
+  is not unit-tested; only the pure view helpers (`views.js`) are exercised (see
+  "Tests"). Everything else is verified by review and manually in a browser.
+- **No component reuse across screens** and no framework conventions; a larger
+  dashboard would justify revisiting this.
+
+This is a deliberate MVP trade-off, not a permanent architectural claim.
+
+### Token storage in the browser (and its risk)
+
+The access and refresh tokens returned by Supabase are kept in
+**`localStorage`** under the key `qv_session` (the access token is also used as
+the `Authorization: Bearer` header for API calls).
+
+**Why `localStorage`:** the backend serves the dashboard as a static file and
+does **not** own the auth session, so it cannot set an httpOnly session cookie;
+with the browser talking to Supabase Auth directly, `localStorage` is the
+simplest place to persist the session across reloads, and it avoids CSRF concerns
+that cookie auth would introduce.
+
+**Risk:** any JavaScript running on the origin can read `localStorage`, so a
+cross-site-scripting (XSS) bug would expose the tokens. We reduce that risk with:
+- a strict Content-Security-Policy on `/dashboard` (no `unsafe-inline`, no
+  third-party script origins — see "Security properties"),
+- rendering **all** user-supplied data through strict escaping (`views.js`), with
+  a test that feeds `<script>` and `"><img onerror>` payloads,
+- a **short-lived access token** (Supabase default) that is transparently
+  refreshed, and
+- clearing the stored session on sign-out and on any 401/expired session.
+
+**Alternative (recommended if the threat model tightens):** move to a
+backend-issued, **httpOnly, Secure, SameSite** session cookie (the browser would
+stop holding tokens at all). That requires the backend to own the session and is
+out of scope for the MVP.
+
 ### Supabase URL configuration (required)
 
 In Supabase → **Authentication → URL Configuration**, set the **Site URL** and
@@ -316,6 +368,13 @@ company returns **404, not 403**.
   enforced under a company row lock so concurrent invitations cannot oversell it.
 - Deactivating a user or quarry takes effect on the **next** request, from the
   database, with no caching.
+- The dashboard (`/dashboard/*`) is served with a strict
+  `Content-Security-Policy` (`default-src 'self'`, no `unsafe-inline`,
+  `connect-src 'self' <supabase-origin>`, `frame-ancestors 'none'`),
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and
+  `X-Frame-Options: DENY`. It renders user-supplied fields through strict HTML
+  escaping (never raw `innerHTML`), and the invite/reset token fragment is
+  stripped from the URL/history as soon as it is read and is never logged.
 - Audit events record auth outcomes, upload success/failure, downloads and
   authorization denials. Tokens, passwords and file contents are never logged or
   recorded (audit metadata is sanitized).

@@ -112,6 +112,34 @@ def create_app(
     async def _domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
         return JSONResponse(status_code=exc.http_status, content={"detail": str(exc)})
 
+    @app.middleware("http")
+    async def _dashboard_security_headers(request: Request, call_next):
+        """Strict headers for the dashboard only.
+
+        The dashboard has no inline scripts/styles, so CSP can forbid them and
+        still work. ``connect-src`` allows the API itself (``'self'``) plus the
+        Supabase Auth origin.
+        """
+        response = await call_next(request)
+        if request.url.path.startswith("/dashboard"):
+            supabase_origin = (settings.supabase_url or "").rstrip("/")
+            connect_src = "'self'" + (f" {supabase_origin}" if supabase_origin else "")
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self'; "
+                "style-src 'self'; "
+                "img-src 'self' data:; "
+                "font-src 'self'; "
+                f"connect-src {connect_src}; "
+                "base-uri 'self'; "
+                "form-action 'self'; "
+                "frame-ancestors 'none'"
+            )
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            response.headers["X-Frame-Options"] = "DENY"
+        return response
+
     return app
 
 

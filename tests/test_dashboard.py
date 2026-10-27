@@ -56,3 +56,31 @@ def test_auth_callback_pages_are_served(client):
         response = client.get(path)
         assert response.status_code == 200
         assert "QuarryVault" in response.text
+
+
+def test_dashboard_sets_strict_security_headers(client, settings):
+    response = client.get("/dashboard/")
+    csp = response.headers["content-security-policy"]
+
+    assert "default-src 'self'" in csp
+    assert "script-src 'self'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "unsafe-inline" not in csp
+    assert "connect-src 'self'" in csp
+    assert settings.supabase_url in csp
+
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["x-frame-options"] == "DENY"
+
+
+def test_dashboard_config_gets_security_headers(client):
+    response = client.get("/dashboard/config")
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+
+
+def test_non_dashboard_endpoints_get_no_csp(client):
+    response = client.get("/health")
+    assert "content-security-policy" not in response.headers
+

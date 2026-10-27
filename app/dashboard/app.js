@@ -4,7 +4,10 @@
 // the PUBLIC anon key. The service-role key never reaches this file. The
 // backend still verifies every access token on each request.
 //
-// No framework, no build step: native ES modules + fetch.
+// No framework, no build step: native ES modules + fetch. All user-supplied
+// data is rendered through the escaped helpers in ./views.js.
+
+import { esc, companyView, platformView } from "./views.js";
 
 const app = document.getElementById("app");
 const SESSION_KEY = "qv_session";
@@ -21,33 +24,18 @@ const state = {
 // utilities
 // --------------------------------------------------------------------------
 
-function esc(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function fmtBytes(n) {
-  if (n === null || n === undefined) return "-";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = Number(n);
-  let i = 0;
-  while (value >= 1024 && i < units.length - 1) {
-    value /= 1024;
-    i += 1;
-  }
-  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-}
-
 function msg(container, text, kind = "") {
   const node = container.querySelector(".msg");
   if (node) {
     node.className = `msg ${kind}`;
     node.textContent = text || "";
   }
+}
+
+// Strip the URL fragment (which carries the one-time auth tokens) from the
+// address bar and history. The tokens are never logged.
+function stripAuthFragment() {
+  history.replaceState(null, "", location.pathname + location.search);
 }
 
 // --------------------------------------------------------------------------
@@ -117,6 +105,8 @@ async function signIn(email, password) {
   });
 }
 
+// Returns true on success. On failure the session is dropped so the caller
+// falls back to the login screen.
 async function refreshSession() {
   if (!state.session?.refresh_token) return false;
   const res = await gotrue("/token", {
@@ -142,12 +132,20 @@ function recoverPassword(email) {
   });
 }
 
+// Full sign-out: drop the session, DOM state and any auth fragment.
 function signOut() {
   saveSession(null);
   state.me = null;
   state.role = null;
   history.replaceState(null, "", "/dashboard/");
   renderLogin();
+}
+
+function handleSessionExpired() {
+  saveSession(null);
+  state.me = null;
+  state.role = null;
+  renderLogin("Your session expired. Please sign in again.");
 }
 
 // --------------------------------------------------------------------------
@@ -160,7 +158,10 @@ async function ensureFreshSession() {
 }
 
 async function api(path, { method = "GET", body } = {}) {
+  if (!state.session) return new Response(null, { status: 401 });
   await ensureFreshSession();
+  if (!state.session) return new Response(null, { status: 401 });
+
   const doFetch = () => {
     const headers = { Authorization: `Bearer ${state.session.access_token}` };
     if (body) headers["Content-Type"] = "application/json";
@@ -170,8 +171,12 @@ async function api(path, { method = "GET", body } = {}) {
       body: body ? JSON.stringify(body) : undefined,
     });
   };
+
   let res = await doFetch();
-  if (res.status === 401 && (await refreshSession())) res = await doFetch();
+  if (res.status === 401) {
+    if (await refreshSession()) res = await doFetch();
+    if (res.status === 401) handleSessionExpired();
+  }
   return res;
 }
 
@@ -184,21 +189,8 @@ async function apiJson(path, opts) {
 }
 
 // --------------------------------------------------------------------------
-// views
+// auth screens
 // --------------------------------------------------------------------------
-
-function layout(title, subtitle, body) {
-  return `
-    <div class="spread">
-      <div>
-        <h1>${esc(title)}</h1>
-        <div class="muted">${esc(subtitle || "")}</div>
-      </div>
-      <button class="secondary" id="signout">Sign out</button>
-    </div>
-    ${body}
-  `;
-}
 
 function renderLogin(error = "") {
   app.innerHTML = `
@@ -293,7 +285,7 @@ function renderSetPassword() {
       expires_at: Date.now() + 3600 * 1000,
     });
     state.callback = null;
-    history.replaceState(null, "", "/dashboard/");
+    stripAuthFragment();
     await start();
   });
 }
@@ -305,54 +297,18 @@ function renderNotice(text) {
       <button class="secondary" id="signout">Sign out</button>
     </div>
     <div class="card"><p>${esc(text)}</p></div>`;
-  app.querySelector("#signout").addEventListener("click", signOut);
+  wireSignOut();
 }
+
+// --------------------------------------------------------------------------
+// management screens
+// --------------------------------------------------------------------------
 
 async function renderPlatform() {
   const companies = await apiJson("/platform/companies");
-  const rows = companies
-    .map(
-      (c) => `
-      <tr>
-        <td>${esc(c.name)}</td>
-        <td><span class="tag ${esc(c.status)}">${esc(c.status)}</span></td>
-        <td>${c.user_count}</td>
-        <td>${fmtBytes(c.used_bytes)} / ${fmtBytes(c.quota_bytes)}</td>
-        <td class="row">
-          ${
-            c.status === "active"
-              ? `<button class="danger" data-suspend="${esc(c.id)}">Suspend</button>`
-              : `<button data-reactivate="${esc(c.id)}">Reactivate</button>`
-          }
-        </td>
-      </tr>`
-    )
-    .join("");
-
-  app.innerHTML = layout(
-    "Platform",
-    "All companies",
-    `
-    <div class="card">
-      <h2>Create company</h2>
-      <form id="create-form" class="row">
-        <input name="name" placeholder="Company name" required />
-        <input name="quota_bytes" type="number" min="1" placeholder="Quota (bytes)" value="5368709120" />
-        <input name="max_users" type="number" min="1" placeholder="Max users" value="10" />
-        <button type="submit">Create</button>
-      </form>
-      <p class="msg"></p>
-    </div>
-    <div class="card">
-      <h2>Companies</h2>
-      <table>
-        <thead><tr><th>Name</th><th>Status</th><th>Users</th><th>Usage</th><th></th></tr></thead>
-        <tbody>${rows || `<tr><td colspan="5" class="muted">No companies yet.</td></tr>`}</tbody>
-      </table>
-    </div>`
-  );
-
+  app.innerHTML = platformView(companies);
   wireSignOut();
+
   const card = app.querySelector("#create-form").closest(".card");
   app.querySelector("#create-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -393,103 +349,7 @@ async function renderCompany() {
     apiJson("/company/usage"),
   ]);
 
-  const empRows = employees
-    .map(
-      (u) => `
-      <tr>
-        <td>${esc(u.email)}</td>
-        <td>${esc(u.role)}</td>
-        <td><span class="tag ${esc(u.status)}">${esc(u.status)}</span></td>
-        <td class="row">
-          ${
-            u.status === "active"
-              ? `<button class="danger" data-disable="${esc(u.id)}">Disable</button>`
-              : `<button data-enable="${esc(u.id)}">Enable</button>`
-          }
-        </td>
-      </tr>`
-    )
-    .join("");
-
-  const quarryRows = quarries
-    .map(
-      (q) => `
-      <tr>
-        <td>${esc(q.name)}</td>
-        <td><span class="tag ${esc(q.status)}">${esc(q.status)}</span></td>
-        <td class="row">
-          <button class="secondary" data-rename="${esc(q.id)}" data-name="${esc(q.name)}">Rename</button>
-          ${
-            q.status === "active"
-              ? `<button class="danger" data-deactivate="${esc(q.id)}">Deactivate</button>`
-              : `<button data-reactivate-q="${esc(q.id)}">Reactivate</button>`
-          }
-        </td>
-      </tr>`
-    )
-    .join("");
-
-  const memberOptions = employees
-    .map((u) => `<option value="${esc(u.id)}">${esc(u.email)}</option>`)
-    .join("");
-  const quarryOptions = quarries
-    .map((q) => `<option value="${esc(q.id)}">${esc(q.name)}</option>`)
-    .join("");
-
-  app.innerHTML = layout(
-    esc(state.me.company.name),
-    `Signed in as ${esc(state.me.user.email)} (${esc(state.me.role)}) · ${fmtBytes(usage.used_bytes)} of ${fmtBytes(usage.quota_bytes)} used`,
-    `
-    <div class="grid2">
-      <div class="card">
-        <h2>Invite employee</h2>
-        <form id="invite-form" class="row">
-          <input name="email" type="email" placeholder="email@example.com" required />
-          <input name="full_name" placeholder="Full name (optional)" />
-          <button type="submit">Send invite</button>
-        </form>
-        <p class="msg"></p>
-      </div>
-      <div class="card">
-        <h2>Create quarry</h2>
-        <form id="quarry-form" class="row">
-          <input name="name" placeholder="Quarry name" required />
-          <button type="submit">Create</button>
-        </form>
-        <p class="msg"></p>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Employees</h2>
-      <table>
-        <thead><tr><th>Email</th><th>Role</th><th>Status</th><th></th></tr></thead>
-        <tbody>${empRows || `<tr><td colspan="4" class="muted">No employees.</td></tr>`}</tbody>
-      </table>
-    </div>
-
-    <div class="card">
-      <h2>Quarries</h2>
-      <table>
-        <thead><tr><th>Name</th><th>Status</th><th></th></tr></thead>
-        <tbody>${quarryRows || `<tr><td colspan="3" class="muted">No quarries.</td></tr>`}</tbody>
-      </table>
-    </div>
-
-    <div class="card">
-      <h2>Permissions</h2>
-      <form id="perm-form" class="row">
-        <select name="user_id">${memberOptions}</select>
-        <select name="quarry_id">${quarryOptions}</select>
-        <label class="row"><input type="checkbox" name="can_view" /> view</label>
-        <label class="row"><input type="checkbox" name="can_upload" /> upload</label>
-        <label class="row"><input type="checkbox" name="can_download" /> download</label>
-        <button type="submit">Save</button>
-      </form>
-      <p class="msg"></p>
-    </div>`
-  );
-
+  app.innerHTML = companyView(state.me, employees, quarries, usage);
   wireSignOut();
 
   const inviteCard = app.querySelector("#invite-form").closest(".card");
@@ -606,6 +466,7 @@ async function resolveRole() {
 }
 
 async function renderApp() {
+  if (!state.session) return;
   if (state.role === "platform") return renderPlatform();
   if (state.role === "company") return renderCompany();
   if (state.role === "employee") {
@@ -617,6 +478,8 @@ async function renderApp() {
 async function start() {
   state.callback = parseAuthFragment();
   if (state.callback) {
+    // Drop the tokens from the URL/history before doing anything else.
+    stripAuthFragment();
     renderSetPassword();
     return;
   }
@@ -627,6 +490,7 @@ async function start() {
   }
   try {
     await resolveRole();
+    if (!state.session) return; // expired mid-flight; login already shown
     await renderApp();
   } catch {
     signOut();
