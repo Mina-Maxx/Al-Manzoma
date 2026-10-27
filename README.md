@@ -91,20 +91,27 @@ tests/               pytest suite
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/company/users` | list users + status |
-| POST | `/company/users/invite` | invite by email (rate limited); never exceeds `max_users` |
-| POST | `/company/users/{id}/disable` | disable a user (last-admin protected) |
-| POST | `/company/users/{id}/enable` | re-enable a user |
+| GET | `/company/employees` | list employees (own company only) + status |
+| POST | `/company/employees/invite` | invite by email (rate limited); never exceeds `max_users` |
+| POST | `/company/employees/{user_id}/disable` | disable a user (last-admin protected) |
+| POST | `/company/employees/{user_id}/enable` | re-enable a user |
 | GET | `/company/quarries` | list quarries (incl. inactive) |
 | POST | `/company/quarries` | create a quarry |
-| POST | `/company/quarries/{id}/deactivate` | deactivate a quarry |
-| POST | `/company/quarries/{id}/reactivate` | reactivate a quarry |
-| GET | `/company/quarries/{id}/permissions` | permission matrix |
-| PUT | `/company/quarries/{id}/permissions/{user_id}` | set a user's flags |
+| PATCH | `/company/quarries/{quarry_id}` | rename a quarry |
+| POST | `/company/quarries/{quarry_id}/deactivate` | deactivate a quarry |
+| POST | `/company/quarries/{quarry_id}/reactivate` | reactivate a quarry |
+| PUT | `/company/quarries/{quarry_id}/permissions/{user_id}` | set a user's flags |
+| GET | `/company/permissions` | permission matrix (members × quarries) |
 | GET | `/company/usage` | quota usage from the same source as uploads |
 
 Deactivating a quarry makes it invisible to its members and blocks listing,
 upload and download (all return **404**).
+
+The invitation **rate limiter is in-memory** (`app/services/rate_limit.py`,
+`INVITE_RATE_LIMIT_PER_MINUTE`). Its counters live in the process and are
+**reset every time the backend restarts**, and they are not shared across
+processes. It is a best-effort protection against accidental hammering, not a
+durable quota; it relies on the single-instance deployment described below.
 
 ## Setup
 
@@ -236,6 +243,17 @@ company returns **404, not 403**.
   request.
 - Cross-tenant access by changing any id returns 404.
 - Client-supplied `company_id` is never trusted.
+- Platform admins are **not** company members: every tenant endpoint (quarries,
+  documents, downloads, `/company/*`) rejects them with **403**. Authorization
+  for tenant data is always derived from a membership row.
+- A `company_admin` cannot escalate: `/platform/*` returns 403, there is no
+  role-change endpoint, and invitations can only ever mint `employee` roles.
+- Every company-scoped action re-checks that the target user *and* quarry belong
+  to the caller's company; a foreign id is reported as 404.
+- The last active `company_admin` cannot be disabled (`409`), and `max_users` is
+  enforced under a company row lock so concurrent invitations cannot oversell it.
+- Deactivating a user or quarry takes effect on the **next** request, from the
+  database, with no caching.
 - Audit events record auth outcomes, upload success/failure, downloads and
   authorization denials. Tokens, passwords and file contents are never logged or
   recorded (audit metadata is sanitized).

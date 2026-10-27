@@ -218,6 +218,29 @@ def deactivate_quarry(
     return QuarryAdminOut.model_validate(quarry)
 
 
+@router.post("/quarries/{quarry_id}/reactivate", response_model=QuarryAdminOut)
+def reactivate_quarry(
+    quarry_id: uuid.UUID,
+    request: Request,
+    ctx: AuthContext = Depends(require_company_admin),
+    db: Session = Depends(get_db),
+    audit: AuditService = Depends(get_audit),
+) -> QuarryAdminOut:
+    quarry = service.set_quarry_status(
+        db, ctx.company_id, quarry_id, QuarryStatus.active
+    )
+    audit.record(
+        action="company.quarry.reactivate",
+        result=AuditResult.success,
+        company_id=ctx.company_id,
+        actor_user_id=ctx.user_id,
+        target_type="quarry",
+        target_id=quarry_id,
+        request=request,
+    )
+    return QuarryAdminOut.model_validate(quarry)
+
+
 @router.put(
     "/quarries/{quarry_id}/permissions/{user_id}", response_model=PermissionOut
 )
