@@ -58,6 +58,7 @@ class SupabaseIdentityProvider(IdentityProvider):
             raise IdentityError("Supabase Admin API is not configured")
         self._base = settings.supabase_url.rstrip("/")
         self._key = settings.supabase_service_role_key
+        self._invite_redirect = settings.invite_redirect_url
         self._timeout = timeout
 
     def _headers(self) -> dict[str, str]:
@@ -68,13 +69,16 @@ class SupabaseIdentityProvider(IdentityProvider):
         }
 
     def invite_user(self, *, email: str, full_name: str | None = None) -> str:
-        body: dict = {"email": email, "email_confirm": True}
+        # Use the *invite* endpoint (not admin/users) so Supabase actually sends
+        # an invitation email whose link returns to the dashboard to set a
+        # password. ``redirect_to`` must be allow-listed in Supabase.
+        body: dict = {"email": email, "redirect_to": self._invite_redirect}
         if full_name:
-            body["user_metadata"] = {"full_name": full_name}
+            body["data"] = {"full_name": full_name}
         try:
             with httpx.Client(timeout=self._timeout) as client:
                 response = client.post(
-                    f"{self._base}/auth/v1/admin/users",
+                    f"{self._base}/auth/v1/invite",
                     headers=self._headers(),
                     json=body,
                 )

@@ -35,6 +35,16 @@ class Settings(BaseSettings):
     # client. Required only for employee invitations (Admin API).
     supabase_service_role_key: str = ""
 
+    # Supabase anon key. PUBLIC by design: it is served to the browser so the
+    # dashboard can talk to Supabase Auth (GoTrue) directly. It is safe to
+    # expose ONLY because the database is never reached with it (no RLS/PGRST
+    # data access); the backend still verifies every JWT.
+    supabase_anon_key: str = ""
+
+    # Public base URL of the backend+dashboard, used to build auth email
+    # redirects (invite acceptance, password reset).
+    dashboard_base_url: str = "http://localhost:8000"
+
     max_file_size_bytes: int = 10 * 1024 * 1024
     default_company_quota_bytes: int = 5 * 1024 * 1024 * 1024
     default_company_max_users: int = 10
@@ -100,6 +110,10 @@ class Settings(BaseSettings):
     @property
     def jwt_issuer(self) -> str:
         return f"{self.supabase_url.rstrip('/')}/auth/v1"
+
+    @property
+    def invite_redirect_url(self) -> str:
+        return f"{self.dashboard_base_url.rstrip('/')}/dashboard/accept-invite"
 
     @property
     def jwt_algorithms(self) -> list[str]:

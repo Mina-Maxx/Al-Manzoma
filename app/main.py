@@ -7,7 +7,16 @@ from fastapi.responses import JSONResponse
 
 from app.config import Settings, get_settings
 from app.db import build_engine_from_settings, build_session_factory
-from app.routers import company_admin, dev, documents, health, me, platform, quarries
+from app.routers import (
+    company_admin,
+    dashboard,
+    dev,
+    documents,
+    health,
+    me,
+    platform,
+    quarries,
+)
 from app.security.jwt import JwtVerifier, build_dev_verifier, build_jwt_verifier
 from app.services.audit import AuditService
 from app.services.errors import DomainError
@@ -94,6 +103,8 @@ def create_app(
     app.include_router(documents.router)
     app.include_router(platform.router)
     app.include_router(company_admin.router)
+    app.include_router(dashboard.router)
+    dashboard.mount_static(app)
     if dev_mode:
         app.include_router(dev.router)
 

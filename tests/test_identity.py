@@ -80,10 +80,11 @@ def test_supabase_invite_parses_id(monkeypatch):
 
     method, url, headers, body = _Client.last
     assert method == "post"
-    assert url.endswith("/auth/v1/admin/users")
+    assert url.endswith("/auth/v1/invite")
     assert headers["apikey"] == "secret-key-value"
     assert body["email"] == "a@example.com"
-    assert body["user_metadata"] == {"full_name": "A"}
+    assert body["data"] == {"full_name": "A"}
+    assert body["redirect_to"].endswith("/dashboard/accept-invite")
 
 
 def test_supabase_invite_duplicate_email(monkeypatch):

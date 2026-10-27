@@ -5,9 +5,9 @@ only. The backend is the single authority for authorization: clients never talk
 to the database or to Google Drive directly.
 
 Delivered so far: login (Supabase JWT) → upload → download with Google Drive as
-the file store behind a storage interface, plus the **management API**: platform
+the file store behind a storage interface; the **management API**: platform
 admins manage companies, and company admins manage their users, quarries and
-permissions.
+permissions; and a static **admin dashboard** at `/dashboard/`.
 
 ## Architecture
 
@@ -40,8 +40,10 @@ app/
     base.py          Storage interface: put / open / delete / exists
     local.py         LocalDiskStorage (tests/dev only)
     gdrive.py        GoogleDriveStorage (pilot)
-  routers/           health, me, quarries, documents, platform, company_admin
+  routers/           health, me, quarries, documents, platform, company_admin,
+                     dashboard
   scripts/           operational CLIs (python -m app.scripts.reap / .orphans)
+  dashboard/         static admin dashboard (vanilla ES modules, no build step)
 alembic/             migrations
 scripts/
   gdrive_oauth.py    one-time local refresh-token helper
@@ -77,6 +79,8 @@ tests/               pytest suite
 | GET | `/quarries/{id}/documents` | only `available` documents, paginated |
 | POST | `/quarries/{id}/documents` | multipart upload, requires `Idempotency-Key` |
 | GET | `/documents/{id}/download` | streamed through the backend |
+| GET | `/dashboard/config` | **public** dashboard config (URL + anon key only) |
+| GET | `/dashboard/` | the static admin dashboard |
 
 ### Platform admin (`/platform`, platform admins only)
 
@@ -128,7 +132,9 @@ Required environment (see `.env.example`): `DATABASE_URL`, `SUPABASE_URL`,
 and `GDRIVE_CREDENTIALS_FILE`. Management features additionally need
 `SUPABASE_SERVICE_ROLE_KEY` (backend-only: it is used to create/disable auth
 users and is never logged or sent to clients) and optionally
-`INVITE_RATE_LIMIT_PER_MINUTE`.
+`INVITE_RATE_LIMIT_PER_MINUTE`. The dashboard additionally needs
+`SUPABASE_ANON_KEY` (public) and `DASHBOARD_BASE_URL` (public base URL used to
+build auth email redirects).
 
 ### Migrations
 
@@ -162,9 +168,65 @@ python scripts/bootstrap.py \
 ```
 
 Passing `--auth-user-id` instead of `--email` reuses an existing account without
-inviting anyone. The script refuses if the identity is ambiguous (already a
-platform admin, already in a company, or both admins are the same person) and
-contains no secrets.
+inviting anyone. With `--email`, the identity provider sends a real invitation
+email (see the dashboard section below). The script refuses if the identity is
+ambiguous (already a platform admin, already in a company, or both admins are
+the same person) and contains no secrets.
+
+## Admin dashboard
+
+A small static dashboard is served by the backend at **`/dashboard/`** (for
+example `http://localhost:8000/dashboard/`). It has no build step and no
+framework: plain ES modules in `app/dashboard/`.
+
+- **Authentication is Supabase Auth only.** There is no dev login and no auth
+  bypass in the dashboard. The browser signs in directly against Supabase
+  (GoTrue) and then calls this backend with the Supabase access token; the
+  backend verifies that token on every request exactly like the API.
+- **What the browser receives.** Only `/dashboard/config`, which returns the
+  **public** `SUPABASE_URL` and `SUPABASE_ANON_KEY`. The `SUPABASE_SERVICE_ROLE_KEY`
+  is never returned to or used by the browser — it stays backend-only. The anon
+  key is safe to expose here only because the database is never queried with it
+  (no PostgREST/RLS data path); all data flows through this API.
+- **Screens:** sign in; accept an invitation and set a password; forgot /
+  reset password; a platform view (companies) for platform admins; and a company
+  view (employees, invitations, quarries, permissions, usage) for company
+  admins. Employees see a "no access" notice.
+
+### Supabase URL configuration (required)
+
+In Supabase → **Authentication → URL Configuration**, set the **Site URL** and
+add these **Redirect URLs** (replace the host with your public `DASHBOARD_BASE_URL`):
+
+```
+https://<host>/dashboard/accept-invite
+https://<host>/dashboard/reset-password
+```
+
+For local development add the `http://localhost:8000/...` equivalents. The
+invitation email link returns to `/dashboard/accept-invite`; the password-reset
+link returns to `/dashboard/reset-password`. Links that are not allow-listed are
+rejected by Supabase.
+
+### Email delivery (invitations and password resets)
+
+Supabase's **built-in email service is limited** (a few messages per hour, and it
+is meant for testing only — it may not deliver to arbitrary recipients). For real
+use, configure a custom SMTP provider.
+
+Using **Resend**:
+
+1. Create a Resend account and **verify a sending domain** (DNS records).
+2. Create an **API key** (this acts as the SMTP password).
+3. In Supabase → **Project Settings → Auth → SMTP Settings**, enable
+   **Custom SMTP** and fill in:
+   - Host: `smtp.resend.com`
+   - Port: `465` (SSL) or `587`
+   - Username: `resend`
+   - Password: your Resend API key
+   - Sender email: e.g. `no-reply@yourdomain`, plus a sender name
+4. Save, then send a test email from the same page.
+5. Optionally raise the email rate limit under Auth settings.
 
 ## Storage
 
@@ -281,7 +343,10 @@ candidates, and the local storage interface. The management API adds: the
 identity provider, platform company management, company users/quarries/
 permissions/usage, invitation limits (rate limit, `max_users`, retry/dedup,
 compensation), last-admin protection, inactive-quarry visibility, and real
-PostgreSQL concurrency tests for concurrent invites and concurrent disables.
+PostgreSQL concurrency tests for concurrent invites and concurrent disables. The
+dashboard adds tests that `/dashboard/config` exposes only public values (never
+the service-role key) and that the static assets and auth-callback pages are
+served.
 
 ## Reconciliation and stale-attempt recovery
 
@@ -354,6 +419,6 @@ requirement of the current design, not a tuning knob.
 
 ## Out of scope (so far)
 
-Android app, admin dashboard, deleting records, search, export, sharing links,
-versions/trash, OCR, notifications, reports, billing, background workers, RLS
-policies, deployment.
+Android app, deleting records, search, export, sharing links, versions/trash,
+OCR, notifications, reports, billing, background workers, RLS policies,
+deployment.
