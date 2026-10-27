@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from app.models import (
     Company,
     CompanyStatus,
+    CompanySyncState,
     Document,
     DocumentStatus,
     Folder,
@@ -28,11 +30,15 @@ def make_company(
     quota_bytes: int = DEFAULT_QUOTA,
     max_users: int = 10,
     status: CompanyStatus = CompanyStatus.active,
+    with_sync_state: bool = True,
 ) -> Company:
     company = Company(
         name=name, quota_bytes=quota_bytes, max_users=max_users, status=status
     )
     db.add(company)
+    db.flush()
+    if with_sync_state:
+        db.add(CompanySyncState(company_id=company.id))
     db.commit()
     return company
 
@@ -82,6 +88,32 @@ def make_quarry(
     return quarry
 
 
+def make_sync_state(
+    db,
+    company: Company,
+    *,
+    last_seq: int = 0,
+    min_valid_seq: int = 0,
+    feed_epoch: uuid.UUID | None = None,
+) -> CompanySyncState:
+    state = db.get(CompanySyncState, company.id)
+    if state is None:
+        state = CompanySyncState(
+            company_id=company.id,
+            feed_epoch=feed_epoch or uuid.uuid4(),
+            last_seq=last_seq,
+            min_valid_seq=min_valid_seq,
+        )
+        db.add(state)
+    else:
+        if feed_epoch is not None:
+            state.feed_epoch = feed_epoch
+        state.last_seq = last_seq
+        state.min_valid_seq = min_valid_seq
+    db.commit()
+    return state
+
+
 def make_folder(
     db,
     company: Company,
@@ -89,12 +121,16 @@ def make_folder(
     *,
     name: str = "Plans",
     parent: Folder | None = None,
+    version: int = 1,
+    deleted_at: datetime | None = None,
 ) -> Folder:
     folder = Folder(
         company_id=company.id,
         quarry_id=quarry.id,
         parent_id=parent.id if parent is not None else None,
         name=name,
+        version=version,
+        deleted_at=deleted_at,
     )
     db.add(folder)
     db.commit()
@@ -182,6 +218,8 @@ def make_document(
     storage_ref: str | None = "ref-123",
     uploaded_by: uuid.UUID | None = None,
     folder_id: uuid.UUID | None = None,
+    version: int = 1,
+    deleted_at: datetime | None = None,
 ) -> Document:
     document = Document(
         company_id=company.id,
@@ -195,6 +233,8 @@ def make_document(
         storage_ref=storage_ref,
         status=status,
         uploaded_by=uploaded_by,
+        version=version,
+        deleted_at=deleted_at,
     )
     db.add(document)
     db.commit()

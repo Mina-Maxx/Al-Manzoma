@@ -32,6 +32,7 @@ from app.db import build_engine, build_session_factory  # noqa: E402
 from app.models import (  # noqa: E402
     Company,
     CompanyStatus,
+    CompanySyncState,
     Membership,
     MembershipRole,
     PlatformAdmin,
@@ -143,6 +144,7 @@ def run(
     )
     db.add(new_company)
     db.flush()
+    db.add(CompanySyncState(company_id=new_company.id))
 
     if ca_user is None:
         ca_user = User(

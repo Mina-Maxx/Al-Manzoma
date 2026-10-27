@@ -21,6 +21,7 @@ from app.config import get_settings  # noqa: E402
 from app.db import build_engine, build_session_factory  # noqa: E402
 from app.models import (  # noqa: E402
     Company,
+    CompanySyncState,
     Membership,
     MembershipRole,
     Quarry,
@@ -53,6 +54,7 @@ def main() -> int:
         )
         db.add(company)
         db.flush()
+        db.add(CompanySyncState(company_id=company.id))
 
         admin = User(
             auth_user_id=ADMIN_SUB, email="admin@example.com", full_name="Dev Admin"

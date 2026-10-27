@@ -38,3 +38,14 @@ class AuditResult(str, enum.Enum):
     success = "success"
     denied = "denied"
     failure = "failure"
+
+
+class ChangeEntityType(str, enum.Enum):
+    folder = "folder"
+    document = "document"
+
+
+class ChangeType(str, enum.Enum):
+    created = "created"
+    updated = "updated"
+    deleted = "deleted"

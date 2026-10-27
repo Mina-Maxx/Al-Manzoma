@@ -6,6 +6,8 @@ from app.models.company import Company
 from app.models.document import Document
 from app.models.enums import (
     AuditResult,
+    ChangeEntityType,
+    ChangeType,
     CompanyStatus,
     DocumentStatus,
     IdempotencyStatus,
@@ -19,14 +21,19 @@ from app.models.membership import Membership
 from app.models.platform_admin import PlatformAdmin
 from app.models.quarry import Quarry
 from app.models.quarry_permission import QuarryPermission
+from app.models.sync import ChangeLog, CompanySyncState
 from app.models.user import User
 
 __all__ = [
     "AuditEvent",
     "AuditResult",
     "Base",
+    "ChangeEntityType",
+    "ChangeLog",
+    "ChangeType",
     "Company",
     "CompanyStatus",
+    "CompanySyncState",
     "Document",
     "DocumentStatus",
     "Folder",

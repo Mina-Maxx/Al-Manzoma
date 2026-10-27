@@ -69,9 +69,15 @@ tests/               pytest suite
 - **Roles live only in our tables**, never in JWT claims. The backend re-reads
   membership and status on every request.
 - **Documents are organized with folders**: `folders` belong to one quarry and
-  may be nested via `parent_id`. Names are unique per parent, case-insensitively.
-  `documents.folder_id` is **nullable**: documents uploaded before folders (and
-  documents placed at the root) remain visible in the quarry root listing.
+  may be nested via `parent_id`. Names are unique per parent, case-insensitively,
+  among active folders. `documents.folder_id` is **nullable**: documents uploaded
+  before folders (and documents placed at the root) remain visible in the quarry
+  root listing.
+- **Versioning and tombstones**: folders and documents carry a positive
+  `version`; deleted folders keep a `deleted_at` tombstone. Folder/document
+  mutations also append a transactionally allocated row to `change_log` under a
+  per-company `company_sync_state` cursor. `GET /sync/changes` delivers those
+  records with opaque, signed cursors; retention/purge is not implemented.
 
 ## Endpoints
 
@@ -82,12 +88,13 @@ tests/               pytest suite
 | GET | `/quarries` | only active quarries with `can_view` |
 | GET | `/quarries/{id}/documents` | only `available` documents, paginated; optional `folder_id` or `root_only` |
 | POST | `/quarries/{id}/documents` | multipart upload (+ optional `folder_id`), requires `Idempotency-Key` |
-| PATCH | `/quarries/{id}/documents/{document_id}` | move a document (`folder_id: null` = root) |
-| GET | `/quarries/{id}/folders` | flat folder list; `parent_id` rebuilds the tree |
+| PATCH | `/quarries/{id}/documents/{document_id}` | move a document (`folder_id: null` = root); optional `If-Match` |
+| GET | `/quarries/{id}/folders` | flat active-folder list; `parent_id` rebuilds the tree |
 | POST | `/quarries/{id}/folders` | create a folder (requires `can_upload`) |
-| PATCH | `/quarries/{id}/folders/{folder_id}` | rename a folder (requires `can_upload`) |
-| DELETE | `/quarries/{id}/folders/{folder_id}` | delete an empty folder (requires `can_upload`) |
+| PATCH | `/quarries/{id}/folders/{folder_id}` | rename a folder (requires `can_upload`); optional `If-Match` |
+| DELETE | `/quarries/{id}/folders/{folder_id}` | soft-delete an empty folder (requires `can_upload`); optional `If-Match` |
 | GET | `/documents/{id}/download` | streamed through the backend |
+| GET | `/sync/changes` | company change feed; opaque `cursor`, `limit` 1–500 (default 100) |
 | GET | `/dashboard/config` | **public** dashboard config (URL + anon key only) |
 | GET | `/dashboard/` | the static admin dashboard |
 
@@ -143,7 +150,10 @@ and `GDRIVE_CREDENTIALS_FILE`. Management features additionally need
 users and is never logged or sent to clients) and optionally
 `INVITE_RATE_LIMIT_PER_MINUTE`. The dashboard additionally needs
 `SUPABASE_ANON_KEY` (public) and `DASHBOARD_BASE_URL` (public base URL used to
-build auth email redirects).
+build auth email redirects). The sync feed additionally requires
+`SYNC_CURSOR_SECRET`: a stable, random value of at least 32 characters used to
+sign opaque cursors. It is required to use the feed (production enforces it at
+startup) and must never be sent to clients or committed.
 
 ### Migrations
 
@@ -361,24 +371,122 @@ surface a generic error to the client; Google error details are never exposed.
 - **Listing is flat**: `GET /quarries/{id}/folders` returns every folder in the
   quarry with its `parent_id`; clients build the tree. No recursive SQL.
 - **Uniqueness**: names are trimmed and compared case-insensitively within the
-  same parent (two `Plans` at the root, or `Plans` under two different parents,
-  are fine). Duplicates return **409**. The database enforces this with partial
-  unique expression indexes, so concurrent creates cannot race past the check.
-- **Deletion is empty-only**: deleting a folder with documents or child folders
-  returns **409** (`folder is not empty`). Deleting a tree means walking it
-  bottom-up. Documents are never deleted implicitly.
+  same parent among active folders (two `Plans` at the root, or `Plans` under two
+  different parents, are fine). Duplicates return **409**. The database enforces
+  this with partial unique expression indexes that exclude tombstones, so
+  concurrent creates cannot race past the check and a deleted folder's name can
+  be reused.
+- **Deletion is empty-only and soft**: deleting a folder with active documents or
+  child folders returns **409** (`folder is not empty`). A successful delete sets
+  `deleted_at`, increments `version` and appends a `folder/deleted` change row in
+  the same transaction. Repeated deletion returns **404**. Deleted folders do not
+  appear in listings, cannot be a parent or document-move destination, and are
+  not cascaded to descendants or documents. There is no restore endpoint.
 - **Root/unfiled**: `GET .../documents?root_only=true` returns
   `folder_id IS NULL`, which includes every document uploaded before folders
   existed. `GET .../documents` without filters keeps its old, whole-quarry
-  behaviour. `folder_id` and `root_only` together are **422**.
+  behaviour. `folder_id` and `root_only` together are **422**. Deleted documents
+  are excluded from listings and downloads.
 - **Moving** is metadata-only: storage object, SHA-256 and bytes are untouched
   (read-only storage contract preserved), and the same download path keeps
-  working. Moving across quarries or companies returns **404**.
+  working. Only active `available` documents can move; no-op moves do not bump
+  the version. Moving across quarries or companies returns **404**.
 - **No folder-move endpoint** in this slice, so a folder cannot be reparented and
   cycles are impossible. Moving a document to an id from another quarry/company
   returns **404**.
+- **Versions and `If-Match`**: folder create/rename/delete and document
+  upload/move return the row `version` and an `ETag`. Folder rename/delete and
+  document move accept `If-Match: "<version>"`; a mismatch is **412**, while a
+  malformed header is **400**. An absent header keeps last-write-wins behaviour.
 - **Audit**: `folder.create`, `folder.rename`, `folder.delete` and
-  `document.move` are recorded with ids only (no names or file contents).
+  `document.move` are recorded with ids only (no names or file contents). The
+  sync change log supplements, but does not replace, these audit events.
+
+## Sync change feed
+
+`GET /sync/changes` returns folder/document mutations for the caller's company.
+The company is always derived from the authenticated membership. Platform
+admins without a company membership receive **403**; an inactive user, deleted
+membership or suspended company is rejected on every request. Quarry visibility
+is recomputed on every page from active quarries where the caller has
+`can_view`; `can_upload` alone does not grant feed access.
+
+Page semantics:
+
+- `limit` bounds the number of **change-log records processed**, including
+  records skipped because the caller cannot view their quarry. A page may
+  therefore contain fewer visible changes, or none, while `has_more` is true.
+- Records are read by global per-company `seq`, not by timestamp. The state row
+  is locked with `FOR SHARE` while `high_water` and the page are read, so writers
+  cannot commit or allocate a sequence inside the page's boundary. New changes
+  appear as `seq > high_water` on a later page.
+- `next_cursor` advances over skipped records too, so an inaccessible event
+  cannot make a client loop. Events are delivered at least once; clients should
+  deduplicate by `(company_id, seq)` and persist the cursor only after applying
+  the page.
+- `high_water` is the company-wide committed sequence boundary, not a
+  per-caller visibility count. Clients must use `has_more` and `next_cursor`,
+  not `cursor >= high_water`, to decide whether they have caught up.
+- A global sequence gap may reveal that some company activity is not visible,
+  but inaccessible entity ids, quarry ids, payloads and names are omitted.
+  This residual metadata is accepted because it stays inside one tenant and
+  does not disclose which quarry or record changed. There is no per-quarry
+  count or hidden-event detail in the response.
+- Permission removal takes effect on the next page. Events skipped while access
+  is absent are not replayed if access returns; membership, quarry and
+  permission changes are outside this feed, so clients should full-resync when
+  their authorization model changes.
+
+Cursors:
+
+- Format is opaque, versioned and HMAC-SHA256 signed:
+  `v1.<base64url(payload)>.<base64url(signature)>`. The payload contains the
+  cursor version, company id, feed epoch and last processed `seq`. It contains
+  no timestamp and no secret.
+- The signing key is `SYNC_CURSOR_SECRET` (minimum 32 characters; required in
+  production). Rotating the key invalidates existing cursors, so clients must
+  bootstrap again.
+- Malformed, tampered, unsupported-version, wrong-company, wrong-epoch, negative
+  and future cursors return **400** with `code: "invalid_cursor"`.
+- `min_valid_seq` is the **minimum acceptable cursor position**, not the first
+  retained sequence. A cursor equal to `min_valid_seq` is accepted, and the
+  next readable row is `min_valid_seq + 1`. A cursor below it returns **410**
+  with `code: "resync_required"`. Retention that removes rows through `R` must
+  set `min_valid_seq = R`.
+- A missing sequence anywhere in the fetched range, including after the last
+  returned row, returns **410** with `code: "resync_required"`. This prevents a
+  corrupt or partially purged feed from silently skipping events. Retention must
+  advance `min_valid_seq` atomically with deleting the corresponding prefix.
+- Cursors do not expire by time. Retention is not implemented, so
+  `min_valid_seq` remains `0` in this phase.
+
+Bootstrap contract (no `cursor`):
+
+1. Call `GET /sync/changes` without a cursor. The response has `changes: []`,
+   `bootstrap_required: true`, `resync_required: true`, and `high_water: H`.
+   `next_cursor` is a valid cursor positioned at `H`; it is **not** the start of
+   a complete history feed.
+2. Build a best-effort client snapshot using the existing quarry/folder/document
+   list APIs. Those APIs use ordinary pagination and are **not** a consistent
+   snapshot under concurrent writes; there is no snapshot endpoint in this
+   phase.
+3. Persist `next_cursor` only after the snapshot is complete, then poll
+   `/sync/changes` with it. Changes committed after `H` are replayed. Changes at
+   or before `H` are not replayed, so the client snapshot is responsible for
+   them. Duplicates are possible and are handled by the at-least-once contract.
+
+The server does **not** claim that this snapshot is complete under concurrent
+mutation. The existing list endpoints use offset pagination and are not a
+consistent snapshot: concurrent inserts or deletes can make a paginated
+snapshot skip or duplicate rows that existed at or before `H`. The returned
+cursor is a replay boundary, not proof of snapshot completeness. Clients must
+not treat a successful bootstrap response as a completed snapshot.
+
+Safe client behavior in this phase: take the snapshot only during a period with
+no concurrent mutations, or defer strict bootstrap to a future consistent
+snapshot/keyset endpoint. On any authorization-model change, discard the cursor
+and bootstrap again; events skipped while access was absent are not replayed.
+Retrying with the same cursor is safe because delivery is at least once.
 
 ## Upload semantics
 
@@ -396,13 +504,18 @@ surface a generic error to the client; Google error details are never exposed.
    `pending` document, commit and release the lock. Pending rows count toward the
    quota, so concurrent uploads cannot oversell it.
 5. Upload to Drive **outside the lock**.
-6. Mark the document `available` with the Drive file id and SHA-256. Users only
-   ever see `available` documents.
+6. Mark the document `available` with the Drive file id and SHA-256, complete
+   the idempotency key and append `document/created` in the same transaction.
+   Users only ever see `available` documents. Pending, failed, storage-reference
+   persistence and stale-attempt reaping never emit a creation event.
 7. On Drive failure the reservation is released. If Drive succeeds but the DB
    update fails, the row stays `pending` for reconciliation.
 
 **Idempotency**: the `Idempotency-Key` header plus the content hash makes a retry
 return the same document. Reusing a key with different content returns `409`.
+Retries and repeated finalization of an already-available document never emit a
+second `document/created` event; the payload contains only document metadata
+(never `storage_ref` or file contents).
 
 ## Download semantics
 
@@ -549,6 +662,7 @@ requirement of the current design, not a tuning knob.
 
 ## Out of scope (so far)
 
-Android app, deleting records, search, export, sharing links, versions/trash,
-OCR, notifications, reports, billing, background workers, RLS policies,
-deployment.
+Android app, a consistent snapshot/keyset endpoint for bootstrap, document
+deletion, restore/trash UI, user-facing version history, retention/purge jobs,
+search, export, sharing links, OCR, notifications, reports, billing, background
+workers, RLS policies, deployment.

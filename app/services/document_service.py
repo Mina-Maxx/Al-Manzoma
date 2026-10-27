@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.models import (
+    ChangeEntityType,
+    ChangeType,
     Document,
     DocumentStatus,
     IdempotencyKey,
@@ -25,6 +27,7 @@ from app.services.errors import (
 )
 from app.services.owner_registry import active_owners
 from app.services.quota import reserve_document
+from app.services.sync import ChangeEntry, append_changes
 from app.storage.base import Storage, StorageError
 from app.utils.files import (
     ALLOWED_EXTENSIONS,
@@ -38,6 +41,17 @@ from app.utils.files import (
 def storage_name(company_id: uuid.UUID, quarry_id: uuid.UUID, doc_id: uuid.UUID) -> str:
     """Logical storage key. Uses IDs only, never user-supplied names."""
     return f"company/{company_id}/quarry/{quarry_id}/{doc_id}"
+
+
+def _document_payload(document: Document) -> dict:
+    """Safe sync payload: metadata only, never a storage reference."""
+    return {
+        "display_name": document.display_name,
+        "folder_id": str(document.folder_id) if document.folder_id else None,
+        "mime_type": document.mime_type,
+        "size_bytes": document.size_bytes,
+        "sha256": document.sha256,
+    }
 
 
 @dataclass
@@ -281,8 +295,27 @@ def finalize_attempt(
     if locked is None:
         db.rollback()
         raise StorageFailure("could not finalize the upload")
-    locked.storage_ref = ref
-    locked.status = DocumentStatus.available
+    if locked.status == DocumentStatus.pending:
+        locked.storage_ref = ref
+        locked.status = DocumentStatus.available
+        append_changes(
+            db,
+            locked.company_id,
+            ChangeEntry(
+                quarry_id=locked.quarry_id,
+                entity_type=ChangeEntityType.document,
+                entity_id=locked.id,
+                change_type=ChangeType.created,
+                entity_version=locked.version,
+                payload=_document_payload(locked),
+            ),
+        )
+    elif locked.status == DocumentStatus.available:
+        # A retried finalization must not emit a second creation event.
+        locked.storage_ref = ref
+    else:
+        db.rollback()
+        raise StorageFailure("could not finalize the upload")
     fresh.document_id = locked.id
     fresh.storage_ref = ref
     fresh.status = IdempotencyStatus.completed

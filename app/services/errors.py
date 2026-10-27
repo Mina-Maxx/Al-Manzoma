@@ -5,6 +5,7 @@ class DomainError(Exception):
     """Base class for expected, safe-to-surface application errors."""
 
     http_status = 400
+    code: str | None = None
 
 
 class QuotaExceeded(DomainError):
@@ -43,6 +44,10 @@ class Conflict(DomainError):
     http_status = 409
 
 
+class PreconditionFailed(DomainError):
+    http_status = 412
+
+
 class MaxUsersReached(Conflict):
     """The company already has its maximum number of users."""
 
@@ -59,3 +64,17 @@ class InviteFailed(DomainError):
     """The invitation could not be completed; retry is safe."""
 
     http_status = 502
+
+
+class InvalidSyncCursor(DomainError):
+    """The supplied sync cursor is malformed, foreign, or out of range."""
+
+    http_status = 400
+    code = "invalid_cursor"
+
+
+class SyncResyncRequired(DomainError):
+    """The cursor predates retained history (or the feed has a gap)."""
+
+    http_status = 410
+    code = "resync_required"

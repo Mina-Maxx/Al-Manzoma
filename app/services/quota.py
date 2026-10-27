@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.models import Company, Document, DocumentStatus, Folder
@@ -46,13 +46,29 @@ def reserve_document(
     same company and quarry. Locking it prevents a concurrent folder deletion
     from racing the insert; the insert keeps the folder relation consistent.
     """
-    company = db.execute(
-        select(Company).where(Company.id == company_id).with_for_update()
-    ).scalar_one()
+    # ``FOR NO KEY UPDATE`` still serializes quota reservations, but unlike
+    # ``FOR UPDATE`` it does not conflict with the ``FOR KEY SHARE`` lock that
+    # PostgreSQL takes on this row for the change_log company foreign key. That
+    # avoids a cycle with a folder lock and company_sync_state during upload
+    # finalization.
+    locked_id = db.execute(
+        text("SELECT id FROM companies WHERE id = :company_id FOR NO KEY UPDATE"),
+        {"company_id": company_id},
+    ).scalar_one_or_none()
+    if locked_id is None:
+        raise NotFound("company not found")
+    company = db.get(Company, company_id, populate_existing=True)
+    if company is None:
+        raise NotFound("company not found")
 
     if folder_id is not None:
         folder = db.execute(
-            select(Folder).where(Folder.id == folder_id).with_for_update()
+            select(Folder)
+            .where(
+                Folder.id == folder_id,
+                Folder.deleted_at.is_(None),
+            )
+            .with_for_update()
         ).scalar_one_or_none()
         if (
             folder is None
@@ -76,6 +92,7 @@ def reserve_document(
         status=DocumentStatus.pending,
         uploaded_by=uploaded_by,
         folder_id=folder_id,
+        version=1,
     )
     db.add(document)
     db.flush()

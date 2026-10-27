@@ -133,7 +133,14 @@ def test_delete_empty_folder(client, db, auth_header):
     remaining = db.execute(
         select(Folder).where(Folder.id == folder_id)
     ).scalar_one_or_none()
-    assert remaining is None
+    assert remaining is not None
+    assert remaining.deleted_at is not None
+    assert remaining.version == 2
+
+    repeated = client.delete(
+        f"/quarries/{quarry.id}/folders/{folder_id}", headers=auth_header("u1")
+    )
+    assert repeated.status_code == 404
 
 
 def test_delete_folder_with_child_is_409(client, db, auth_header):

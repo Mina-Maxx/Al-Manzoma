@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import BigInteger, ForeignKey, Index, String
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    text,
+)
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,6 +23,7 @@ from app.models.enums import DocumentStatus
 class Document(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "documents"
     __table_args__ = (
+        CheckConstraint("version >= 1", name="ck_documents_version_positive"),
         Index(
             "ix_documents_company_quarry_status",
             "company_id",
@@ -45,4 +56,10 @@ class Document(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
+    )
+    version: Mapped[int] = mapped_column(
+        Integer, default=1, server_default=text("1"), nullable=False
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )

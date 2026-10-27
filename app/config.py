@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import model_validator
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 INSECURE_DEV_SECRET = "dev-insecure-secret-change-me"
 MIN_DEV_SECRET_LENGTH = 32
+MIN_SYNC_CURSOR_SECRET_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -64,6 +65,10 @@ class Settings(BaseSettings):
     # minute). In-process: valid because the backend is single-instance.
     invite_rate_limit_per_minute: int = 10
 
+    # HMAC key for opaque sync-feed cursors. Must be stable across restarts and
+    # is required in production. Never expose it to clients or log it.
+    sync_cursor_secret: SecretStr = SecretStr("")
+
     storage_backend: str = "local"
     storage_local_root: str = "./.storage"
 
@@ -102,6 +107,31 @@ class Settings(BaseSettings):
                 "in development."
             )
         return self
+
+    @model_validator(mode="after")
+    def _validate_sync_cursor_secret(self) -> Settings:
+        if (self.app_env or "").lower() != "production":
+            return self
+        if (
+            len(self.sync_cursor_secret.get_secret_value())
+            < MIN_SYNC_CURSOR_SECRET_LENGTH
+        ):
+            raise ValueError(
+                "SYNC_CURSOR_SECRET must be at least "
+                f"{MIN_SYNC_CURSOR_SECRET_LENGTH} characters in production."
+            )
+        return self
+
+    @property
+    def sync_cursor_key(self) -> bytes:
+        """Return the HMAC key, failing closed if the deployment is unconfigured."""
+        secret = self.sync_cursor_secret.get_secret_value()
+        if len(secret) < MIN_SYNC_CURSOR_SECRET_LENGTH:
+            raise RuntimeError(
+                "SYNC_CURSOR_SECRET must be at least "
+                f"{MIN_SYNC_CURSOR_SECRET_LENGTH} characters to use the sync feed"
+            )
+        return secret.encode("utf-8")
 
     @property
     def jwks_url(self) -> str:

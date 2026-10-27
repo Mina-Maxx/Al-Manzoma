@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
@@ -60,6 +61,7 @@ class DocumentOut(BaseModel):
     sha256: str | None
     status: str
     uploaded_by: uuid.UUID | None
+    version: int
     created_at: datetime
 
 
@@ -86,6 +88,7 @@ class FolderOut(BaseModel):
     quarry_id: uuid.UUID
     parent_id: uuid.UUID | None
     name: str
+    version: int
     created_at: datetime
     updated_at: datetime
 
@@ -93,6 +96,29 @@ class FolderOut(BaseModel):
 class DocumentMove(BaseModel):
     # Omitted or null both mean "move to root/unfiled".
     folder_id: uuid.UUID | None = None
+
+
+# --- Sync feed --------------------------------------------------------------
+
+
+class SyncChangeOut(BaseModel):
+    seq: int
+    entity_type: str
+    entity_id: uuid.UUID
+    quarry_id: uuid.UUID
+    change_type: str
+    entity_version: int
+    changed_at: datetime
+    payload: dict[str, Any]
+
+
+class SyncChangesOut(BaseModel):
+    changes: list[SyncChangeOut]
+    next_cursor: str
+    high_water: int
+    has_more: bool
+    resync_required: bool
+    bootstrap_required: bool
 
 
 # --- Management API ---------------------------------------------------------

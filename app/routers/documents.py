@@ -40,6 +40,7 @@ from app.services.document_service import upload_document
 from app.services.errors import DomainError
 from app.storage.base import Storage, StorageNotFound, StorageUnavailable
 from app.utils.files import sanitize_filename
+from app.utils.preconditions import etag_for_version, parse_if_match
 
 router = APIRouter(tags=["documents"])
 
@@ -93,6 +94,7 @@ def list_documents(
         Document.company_id == ctx.company_id,
         Document.quarry_id == quarry.id,
         Document.status == DocumentStatus.available,
+        Document.deleted_at.is_(None),
     )
     if folder_id is not None:
         statement = statement.where(Document.folder_id == folder_id)
@@ -148,6 +150,7 @@ def upload_document_endpoint(
         raise
 
     response.status_code = status.HTTP_201_CREATED if created else status.HTTP_200_OK
+    response.headers["ETag"] = etag_for_version(document.version)
     audit.record(
         action="document.upload",
         result=AuditResult.success,
@@ -168,6 +171,8 @@ def move_document_endpoint(
     document_id: uuid.UUID,
     body: DocumentMove,
     request: Request,
+    response: Response,
+    if_match: str | None = Header(default=None, alias="If-Match"),
     quarry: Quarry = Depends(require_quarry_permission("can_upload")),
     ctx: AuthContext = Depends(get_auth_context),
     db: Session = Depends(get_db),
@@ -175,8 +180,14 @@ def move_document_endpoint(
 ) -> DocumentOut:
     """Move a document within the same quarry; ``folder_id: null`` = root."""
     document, previous_folder_id = folder_service.move_document(
-        db, ctx.company_id, quarry.id, document_id, body.folder_id
+        db,
+        ctx.company_id,
+        quarry.id,
+        document_id,
+        body.folder_id,
+        expected_version=parse_if_match(if_match),
     )
+    response.headers["ETag"] = etag_for_version(document.version)
     audit.record(
         action="document.move",
         result=AuditResult.success,

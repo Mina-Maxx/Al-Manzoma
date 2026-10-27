@@ -5,7 +5,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Company, CompanyStatus, Membership
+from app.models import Company, CompanyStatus, CompanySyncState, Membership
 from app.services.errors import Conflict, NotFound
 from app.services.quota import company_used_bytes
 
@@ -34,6 +34,9 @@ def create_company(
         status=CompanyStatus.active,
     )
     db.add(company)
+    db.flush()
+    # A company must have a feed state before any business mutation can append.
+    db.add(CompanySyncState(company_id=company.id))
     db.commit()
     db.refresh(company)
     return company

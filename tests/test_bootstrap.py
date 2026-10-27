@@ -3,7 +3,14 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 
-from app.models import Company, Membership, MembershipRole, PlatformAdmin, User
+from app.models import (
+    Company,
+    CompanySyncState,
+    Membership,
+    MembershipRole,
+    PlatformAdmin,
+    User,
+)
 from scripts import bootstrap
 from tests.factories import make_company, make_membership, make_platform_admin, make_user
 from tests.fakes import FakeIdentityProvider
@@ -32,6 +39,9 @@ def test_bootstrap_creates_records_via_identity(db):
     admin = db.get(PlatformAdmin, result["platform_admin_id"])
     assert admin.auth_user_id == "auth-root@example.com"
     assert db.get(Company, result["company_id"]).name == "Acme Quarry"
+    state = db.get(CompanySyncState, result["company_id"])
+    assert state is not None
+    assert state.last_seq == 0
     membership = db.execute(
         select(Membership).where(Membership.company_id == result["company_id"])
     ).scalar_one()

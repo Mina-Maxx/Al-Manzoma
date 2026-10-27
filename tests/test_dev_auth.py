@@ -8,7 +8,14 @@ from app.config import INSECURE_DEV_SECRET, Settings
 from app.main import create_app
 
 VALID_SECRET = "v" * 40
-_ENV_KEYS = ("APP_ENV", "DEV_AUTH_ENABLED", "DEV_JWT_SECRET", "SUPABASE_URL")
+VALID_SYNC_SECRET = "s" * 40
+_ENV_KEYS = (
+    "APP_ENV",
+    "DEV_AUTH_ENABLED",
+    "DEV_JWT_SECRET",
+    "SUPABASE_URL",
+    "SYNC_CURSOR_SECRET",
+)
 
 
 @pytest.fixture(autouse=True)
@@ -18,6 +25,7 @@ def _isolate_env(monkeypatch):
 
 
 def _settings(**kwargs) -> Settings:
+    kwargs.setdefault("sync_cursor_secret", VALID_SYNC_SECRET)
     return Settings(_env_file=None, **kwargs)
 
 

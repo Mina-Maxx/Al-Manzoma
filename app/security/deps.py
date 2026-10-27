@@ -260,6 +260,7 @@ def get_download_document(
         document is None
         or document.company_id != ctx.company_id
         or document.status != DocumentStatus.available
+        or document.deleted_at is not None
     ):
         audit.record(
             action="document.download",

@@ -17,6 +17,7 @@ from app.routers import (
     me,
     platform,
     quarries,
+    sync,
 )
 from app.security.jwt import JwtVerifier, build_dev_verifier, build_jwt_verifier
 from app.services.audit import AuditService
@@ -103,6 +104,7 @@ def create_app(
     app.include_router(quarries.router)
     app.include_router(folders.router)
     app.include_router(documents.router)
+    app.include_router(sync.router)
     app.include_router(platform.router)
     app.include_router(company_admin.router)
     app.include_router(dashboard.router)
@@ -112,7 +114,10 @@ def create_app(
 
     @app.exception_handler(DomainError)
     async def _domain_error_handler(request: Request, exc: DomainError) -> JSONResponse:
-        return JSONResponse(status_code=exc.http_status, content={"detail": str(exc)})
+        content = {"detail": str(exc)}
+        if exc.code is not None:
+            content["code"] = exc.code
+        return JSONResponse(status_code=exc.http_status, content=content)
 
     @app.middleware("http")
     async def _dashboard_security_headers(request: Request, call_next):

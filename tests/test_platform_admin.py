@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import func, select
 
-from app.models import Company, CompanyStatus
+from app.models import Company, CompanyStatus, CompanySyncState
 from tests.factories import make_platform_admin, provision_user
 
 
@@ -43,6 +43,10 @@ def test_platform_admin_creates_company(client, db, auth_header):
         select(Company).where(Company.name == "FreshCo")
     ).scalar_one()
     assert stored.status == CompanyStatus.active
+    state = db.get(CompanySyncState, stored.id)
+    assert state is not None
+    assert state.last_seq == 0
+    assert state.min_valid_seq == 0
 
 
 def test_create_company_input_validation(client, db, auth_header):

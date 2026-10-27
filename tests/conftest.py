@@ -40,6 +40,7 @@ def _settings(_storage_root):
         default_company_max_users=10,
         storage_backend="local",
         storage_local_root=str(_storage_root),
+        sync_cursor_secret="test-sync-cursor-secret-0123456789abcdef",
     )
 
 
