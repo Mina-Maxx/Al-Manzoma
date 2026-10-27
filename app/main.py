@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -11,6 +13,37 @@ from app.services.audit import AuditService
 from app.services.errors import DomainError
 from app.storage import Storage, build_storage
 
+MAX_WORKERS_MESSAGE = (
+    "QuarryVault must run as a single worker in a single instance: the "
+    "active-owner registry that protects idempotent uploads is process-local. "
+    "Refusing to start because {workers} workers were configured. Set "
+    "WEB_CONCURRENCY=1 and start uvicorn with --workers 1."
+)
+
+
+def _as_int(value: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _configured_worker_count(settings: Settings) -> int:
+    """Best-effort worker count from config and the uvicorn command line.
+
+    Uvicorn does not export a worker count, so the ``--workers`` flag is read
+    from ``sys.argv`` (worker processes inherit the parent's argv). ``-w`` is
+    included for gunicorn-style launchers.
+    """
+    counts = [settings.web_concurrency]
+    argv = sys.argv
+    for index, arg in enumerate(argv):
+        if arg in ("--workers", "-w") and index + 1 < len(argv):
+            counts.append(_as_int(argv[index + 1]))
+        elif arg.startswith("--workers="):
+            counts.append(_as_int(arg.split("=", 1)[1]))
+    return max(counts)
+
 
 def create_app(
     settings: Settings | None = None,
@@ -21,6 +54,11 @@ def create_app(
     audit: AuditService | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
+
+    workers = _configured_worker_count(settings)
+    if workers > 1:
+        raise RuntimeError(MAX_WORKERS_MESSAGE.format(workers=workers))
+
     app = FastAPI(title="QuarryVault", version="0.1.0")
 
     engine = None

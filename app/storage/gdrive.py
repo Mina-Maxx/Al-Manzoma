@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 import tempfile
 import time
+from collections.abc import Iterator
 from typing import BinaryIO
 
 from google.oauth2.credentials import Credentials
@@ -168,3 +169,34 @@ class GoogleDriveStorage(Storage):
             return True
         except StorageNotFound:
             return False
+
+    def iter_refs(self) -> Iterator[str]:
+        """Yield the id of every non-folder file under the root folder.
+
+        Breadth-first walk of the private root folder tree. Read-only: only
+        ``files().list`` is called, never create/update/delete.
+        """
+        queue = [self.root_folder_id]
+        while queue:
+            parent_id = queue.pop()
+            page_token = None
+            while True:
+                resp = self._execute(
+                    self.service.files().list(
+                        q=f"'{parent_id}' in parents and trashed = false",
+                        spaces="drive",
+                        fields="nextPageToken, files(id, mimeType)",
+                        pageSize=1000,
+                        pageToken=page_token,
+                        supportsAllDrives=_SUPPORTS_ALL,
+                        includeItemsFromAllDrives=_SUPPORTS_ALL,
+                    )
+                )
+                for entry in resp.get("files", []):
+                    if entry.get("mimeType") == _FOLDER_MIME:
+                        queue.append(entry["id"])
+                    else:
+                        yield entry["id"]
+                page_token = resp.get("nextPageToken")
+                if not page_token:
+                    break

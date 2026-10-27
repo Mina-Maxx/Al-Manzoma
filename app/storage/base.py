@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from typing import BinaryIO
 
 
@@ -42,3 +43,13 @@ class Storage(ABC):
     @abstractmethod
     def exists(self, ref: str) -> bool:
         """Return whether ``ref`` exists."""
+
+    def iter_refs(self) -> Iterator[str]:
+        """Yield every ref currently stored. Used by read-only audit tooling.
+
+        Optional: backends that cannot enumerate their contents raise
+        :class:`NotImplementedError`. Implementations must never mutate storage.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support listing stored objects"
+        )

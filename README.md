@@ -34,6 +34,7 @@ app/
     local.py         LocalDiskStorage (tests/dev only)
     gdrive.py        GoogleDriveStorage (pilot)
   routers/           health, me, quarries, documents
+  scripts/           operational CLIs (python -m app.scripts.reap / .orphans)
 alembic/             migrations
 scripts/
   gdrive_oauth.py    one-time local refresh-token helper
@@ -105,11 +106,17 @@ put(stream, name) -> ref
 open(ref) -> stream
 delete(ref)
 exists(ref)
+iter_refs() -> Iterator[ref]   # optional; read-only audit listing
 ```
 
 `name` is a logical key (`company/{company_id}/quarry/{quarry_id}/{document_id}`)
 built from IDs only, never user-supplied names. The database stores the returned
 Drive **file id** as the source of truth, never a filename.
+
+`iter_refs()` enumerates stored objects for the read-only orphan audit. It is
+optional: a backend that cannot enumerate raises `NotImplementedError`.
+`LocalDiskStorage` walks its root; `GoogleDriveStorage` walks the private root
+folder tree (list calls only, never create/update/delete).
 
 Two implementations: `GoogleDriveStorage` (pilot) and `LocalDiskStorage` (tests
 and local development only).
@@ -213,7 +220,53 @@ multi-worker deployment would need a shared mechanism (e.g. advisory locks).
 PostgreSQL and the storage backend are also not one transaction: an object
 written just before a crash cannot always be attributed, so it is left in place
 (residual orphan risk). No scheduler or background worker is built in this
-slice; the reaper is called explicitly.
+slice; the reaper is run explicitly (see below).
+
+### Running the reaper
+
+```bash
+python -m app.scripts.reap
+python -m app.scripts.reap --older-than-seconds 600 --limit 500
+```
+
+Run it from cron/systemd-timer on a schedule (e.g. every few minutes) with a
+threshold **comfortably longer than any legitimate upload**. The default
+threshold is `IDEMPOTENCY_LEASE_SECONDS` (300s). The command releases the
+pending reservation and marks the key failed so the client can retry with the
+same key; it never deletes storage objects, and it is safe to run repeatedly.
+
+Caveat: the command runs in its **own process**, so it cannot see the API
+server's in-memory owner registry and relies solely on lease expiry. Keep the
+threshold well above the worst-case upload time.
+
+### Auditing orphaned storage objects
+
+```bash
+python -m app.scripts.orphans
+```
+
+Prints two read-only lists: objects in storage with no database row
+(`orphan_on_storage`) and database refs whose object is missing from storage
+(`missing_in_storage`). Both `documents.storage_ref` and
+`idempotency_keys.storage_ref` count as known refs (a failed attempt keeps its
+ref on purpose). This command **never deletes or mutates** anything.
+
+### Single worker, single instance (required)
+
+The active-owner registry is process-local, so upload idempotency is only safe
+when the backend runs as **one worker in one instance**. The app enforces this:
+if `WEB_CONCURRENCY` (or a `--workers N` / `-w N` command-line flag with `N > 1`)
+is set, `create_app()` raises at startup and the process refuses to serve.
+
+```bash
+# correct
+uvicorn app.main:app --workers 1
+# or simply
+uvicorn app.main:app
+```
+
+Do not scale the API to multiple replicas. This restriction is a hard
+requirement of the current design, not a tuning knob.
 
 ## Out of scope (this slice)
 

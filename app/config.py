@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     # cross-process liveness authority (see app/services/owner_registry.py).
     idempotency_lease_seconds: int = 300
 
+    # The active-owner registry that guards idempotent uploads is process-local,
+    # so the backend MUST run as a single worker in a single instance. The app
+    # refuses to start when this is greater than 1 (see app/main.py).
+    web_concurrency: int = 1
+
     storage_backend: str = "local"
     storage_local_root: str = "./.storage"
 

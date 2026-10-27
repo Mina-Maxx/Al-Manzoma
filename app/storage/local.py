@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
 from typing import BinaryIO
 
@@ -47,3 +48,10 @@ class LocalDiskStorage(Storage):
 
     def exists(self, ref: str) -> bool:
         return self._resolve(ref).is_file()
+
+    def iter_refs(self) -> Iterator[str]:
+        if not self.root.is_dir():
+            return
+        for path in self.root.rglob("*"):
+            if path.is_file():
+                yield path.relative_to(self.root).as_posix()
