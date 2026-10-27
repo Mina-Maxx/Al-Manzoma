@@ -11,6 +11,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Uuid,
     text,
 )
 from sqlalchemy import Enum as SAEnum
@@ -61,5 +62,20 @@ class Document(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Integer, default=1, server_default=text("1"), nullable=False
     )
     deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    deleted_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    purge_attempt: Mapped[int] = mapped_column(
+        Integer, default=0, server_default=text("0"), nullable=False
+    )
+    purge_token: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), nullable=True
+    )
+    purge_claimed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    purge_failed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

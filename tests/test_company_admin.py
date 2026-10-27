@@ -298,3 +298,60 @@ def test_invite_is_rate_limited(client, db, auth_header, identity):
         )
     blocked = _invite(client, auth_header, "admin", "one-too-many@example.com")
     assert blocked.status_code == 429
+
+
+def test_office_overview_endpoint(client, db, auth_header):
+    company, admin, quarry = _setup(db)
+    make_document(db, company, quarry, size_bytes=5000)
+
+    res = client.get("/company/overview", headers=auth_header("admin"))
+    assert res.status_code == 200
+    data = res.json()
+    assert data["company_id"] == str(company.id)
+    assert data["total_quarries"] == 1
+    assert data["active_documents"] == 1
+    assert data["used_bytes"] == 5000
+
+
+def test_company_audit_endpoint(client, db, auth_header):
+    company, admin, quarry = _setup(db)
+    _invite(client, auth_header, "admin", "audited_emp@example.com")
+
+    res = client.get("/company/audit", headers=auth_header("admin"))
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total"] >= 1
+    assert any(i["action"] == "company.employee.invite" for i in data["items"])
+
+
+def test_company_alerts_endpoint(client, db, auth_header):
+    company, admin, quarry = _setup(db, max_users=1)
+    res = client.get("/company/alerts", headers=auth_header("admin"))
+    assert res.status_code == 200
+    alerts = res.json()
+    assert isinstance(alerts, list)
+
+
+def test_company_export_csv_endpoints(client, db, auth_header):
+    company, admin, quarry = _setup(db)
+    make_document(db, company, quarry)
+
+    # 1. Employees export
+    res = client.get("/company/export/employees", headers=auth_header("admin"))
+    assert res.status_code == 200
+    assert "text/csv" in res.headers["content-type"]
+    assert "admin@example.com" in res.text
+
+    # 2. Quarries export
+    res = client.get("/company/export/quarries", headers=auth_header("admin"))
+    assert res.status_code == 200
+    assert "North Pit" in res.text
+
+    # 3. Documents export
+    res = client.get("/company/export/documents", headers=auth_header("admin"))
+    assert res.status_code == 200
+    assert "doc.pdf" in res.text
+
+    # 4. Unknown export type
+    res = client.get("/company/export/invalid_type", headers=auth_header("admin"))
+    assert res.status_code == 400

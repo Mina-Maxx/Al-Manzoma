@@ -220,6 +220,7 @@ def make_document(
     folder_id: uuid.UUID | None = None,
     version: int = 1,
     deleted_at: datetime | None = None,
+    deleted_by: uuid.UUID | None = None,
 ) -> Document:
     document = Document(
         company_id=company.id,
@@ -235,6 +236,7 @@ def make_document(
         uploaded_by=uploaded_by,
         version=version,
         deleted_at=deleted_at,
+        deleted_by=deleted_by,
     )
     db.add(document)
     db.commit()

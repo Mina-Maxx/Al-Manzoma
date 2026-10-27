@@ -240,6 +240,27 @@ def create_quarry(db: Session, company_id: uuid.UUID, *, name: str) -> Quarry:
 
     quarry = Quarry(company_id=company_id, name=cleaned, status=QuarryStatus.active)
     db.add(quarry)
+    db.flush()
+
+    active_user_ids = db.execute(
+        select(User.id)
+        .join(Membership, Membership.user_id == User.id)
+        .where(
+            Membership.company_id == company_id,
+            User.status == UserStatus.active,
+        )
+    ).scalars().all()
+    for uid in active_user_ids:
+        db.add(
+            QuarryPermission(
+                user_id=uid,
+                quarry_id=quarry.id,
+                can_view=True,
+                can_upload=False,
+                can_download=False,
+            )
+        )
+
     db.commit()
     db.refresh(quarry)
     return quarry

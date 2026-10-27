@@ -15,3 +15,12 @@ service_account*.json
 token.json
 *.pem
 *.key
+*.dump
+.idea/
+build/
+**/build/
+*.apk
+*.aab
+.gradle/
+.kotlin/
+**/local.properties

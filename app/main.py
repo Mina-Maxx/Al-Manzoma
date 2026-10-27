@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import Settings, get_settings
@@ -74,6 +75,15 @@ def create_app(
         raise RuntimeError(MAX_WORKERS_MESSAGE.format(workers=workers))
 
     app = FastAPI(title="QuarryVault", version="0.1.0")
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["Content-Disposition", "Content-Length", "ETag"],
+    )
 
     engine = None
     if session_factory is None:

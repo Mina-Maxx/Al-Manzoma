@@ -12,7 +12,12 @@ COUNTED_STATUSES = (DocumentStatus.pending, DocumentStatus.available)
 
 
 def company_used_bytes(db: Session, company_id: uuid.UUID) -> int:
-    """Bytes counted against the quota (pending reservations + available files)."""
+    """Bytes counted against the quota.
+    
+    Includes pending reservations, active files, and soft-deleted/purge-claimed
+    files retained in storage. A file only leaves this count once storage
+    deletion is confirmed and its database row is permanently deleted.
+    """
     total = db.execute(
         select(func.coalesce(func.sum(Document.size_bytes), 0)).where(
             Document.company_id == company_id,

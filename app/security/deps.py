@@ -88,8 +88,14 @@ def _verify_claims(
         raise _unauthorized()
     try:
         return verifier.verify(credentials.credentials)
-    except JwtVerificationError:
-        audit.record(action="auth.verify", result=AuditResult.denied, request=request)
+    except JwtVerificationError as exc:
+        print(f"[AUTH ERROR] Claims verification failed: {exc}")
+        audit.record(
+            action="auth.verify",
+            result=AuditResult.denied,
+            meta={"error": str(exc)},
+            request=request,
+        )
         raise _unauthorized()
 
 
@@ -105,8 +111,14 @@ def get_auth_context(
 
     try:
         claims = verifier.verify(credentials.credentials)
-    except JwtVerificationError:
-        audit.record(action="auth.verify", result=AuditResult.denied, request=request)
+    except JwtVerificationError as exc:
+        print(f"[AUTH ERROR] Claims verification failed: {exc}")
+        audit.record(
+            action="auth.verify",
+            result=AuditResult.denied,
+            meta={"error": str(exc)},
+            request=request,
+        )
         raise _unauthorized()
 
     sub = claims.get("sub")
@@ -114,11 +126,80 @@ def get_auth_context(
         audit.record(action="auth.verify", result=AuditResult.denied, request=request)
         raise _unauthorized()
 
+    # Check if a platform admin is accessing a specific company via X-Company-Id
+    x_company_id = request.headers.get("X-Company-Id")
+    if x_company_id:
+        platform_admin = db.execute(
+            select(PlatformAdmin).where(
+                PlatformAdmin.auth_user_id == str(sub),
+                PlatformAdmin.status == UserStatus.active,
+            )
+        ).scalar_one_or_none()
+        if platform_admin is not None:
+            try:
+                target_company_uuid = uuid.UUID(x_company_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="invalid company id header",
+                )
+            target_company = db.get(Company, target_company_uuid)
+            if target_company is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="company not found",
+                )
+            admin_user = db.execute(
+                select(User).where(User.auth_user_id == str(sub))
+            ).scalar_one_or_none()
+            if admin_user is None:
+                admin_user = User(
+                    id=platform_admin.id,
+                    auth_user_id=platform_admin.auth_user_id,
+                    email=platform_admin.email,
+                    full_name=platform_admin.full_name,
+                    status=UserStatus.active,
+                )
+            synthetic_membership = Membership(
+                user_id=admin_user.id,
+                company_id=target_company.id,
+                role=MembershipRole.company_admin,
+            )
+            # Every request using the privileged company context can expose
+            # tenant data, so record the grant independently of the route.
+            audit.record(
+                action="platform.cross_office_content_access",
+                result=AuditResult.success,
+                company_id=target_company.id,
+                target_type="company",
+                target_id=target_company.id,
+                meta={
+                    "admin_id": str(platform_admin.id),
+                    "access_method": "X-Company-Id",
+                    "method": request.method,
+                    "path": request.url.path,
+                },
+                request=request,
+            )
+            return AuthContext(
+                user=admin_user,
+                company=target_company,
+                membership=synthetic_membership,
+                claims=claims,
+            )
+
     user = db.execute(
         select(User).where(User.auth_user_id == str(sub))
     ).scalar_one_or_none()
     if user is None:
-        audit.record(action="auth.user_lookup", result=AuditResult.denied, request=request)
+        email = claims.get("email")
+        print(f"[AUTH PROVISIONING] User sub={sub} email={email} not provisioned in QuarryVault DB")
+        audit.record(
+            action="auth.user_lookup",
+            result=AuditResult.denied,
+            meta={"auth_user_id": str(sub), "email": email},
+            request=request,
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="user not provisioned")
 
     # Status is read fresh from the database on every request: no caching.
@@ -222,6 +303,8 @@ def require_quarry_permission(permission: str):
         audit: AuditService = Depends(get_audit),
     ) -> Quarry:
         quarry = _load_quarry_in_company(db, ctx.company_id, quarry_id)
+        if ctx.role == MembershipRole.company_admin:
+            return quarry
         perm = db.execute(
             select(QuarryPermission).where(
                 QuarryPermission.user_id == ctx.user_id,

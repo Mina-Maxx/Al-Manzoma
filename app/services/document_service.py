@@ -1,34 +1,48 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.models import (
+    AuditEvent,
+    AuditResult,
     ChangeEntityType,
     ChangeType,
     Document,
     DocumentStatus,
+    Folder,
     IdempotencyKey,
     IdempotencyStatus,
+    MembershipRole,
     Quarry,
 )
+from app.schemas import TrashDocumentOut
 from app.security.context import AuthContext
 from app.services import idempotency
 from app.services.errors import (
+    Conflict,
+    Forbidden,
+    Gone,
     IdempotencyConflict,
     IdempotencyInProgress,
     InvalidFileType,
+    NotFound,
+    PreconditionFailed,
     StorageFailure,
 )
 from app.services.owner_registry import active_owners
 from app.services.quota import reserve_document
 from app.services.sync import ChangeEntry, append_changes
-from app.storage.base import Storage, StorageError
+from app.storage.base import Storage, StorageError, StorageUnavailable
+
+logger = logging.getLogger("quarryvault.documents")
 from app.utils.files import (
     ALLOWED_EXTENSIONS,
     ALLOWED_MIME_TYPES,
@@ -481,3 +495,361 @@ def upload_document(
             active_owners.unregister(attempt.key_id, attempt.owner_token)
     finally:
         streamed.spool.close()
+
+
+def soft_delete_document(
+    db: Session,
+    ctx: AuthContext,
+    quarry: Quarry,
+    document_id: uuid.UUID,
+    *,
+    expected_version: int | None = None,
+) -> Document:
+    now_utc = datetime.now(timezone.utc)
+    document = db.execute(
+        select(Document)
+        .where(Document.id == document_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if (
+        document is None
+        or document.company_id != ctx.company_id
+        or document.quarry_id != quarry.id
+    ):
+        raise NotFound("document not found")
+
+    if document.status != DocumentStatus.available or document.deleted_at is not None:
+        raise NotFound("document not found")
+
+    if expected_version is not None and document.version != expected_version:
+        raise PreconditionFailed("document version does not match If-Match")
+
+    document.deleted_at = now_utc
+    document.deleted_by = ctx.user_id
+    document.version += 1
+
+    append_changes(
+        db,
+        ctx.company_id,
+        ChangeEntry(
+            quarry_id=quarry.id,
+            entity_type=ChangeEntityType.document,
+            entity_id=document.id,
+            change_type=ChangeType.deleted,
+            entity_version=document.version,
+            payload={},
+        ),
+    )
+
+    success_audit = AuditEvent(
+        company_id=ctx.company_id,
+        actor_user_id=ctx.user_id,
+        action="document.delete",
+        target_type="document",
+        target_id=str(document.id),
+        result=AuditResult.success,
+        meta={
+            "deleted_by_user_id": str(ctx.user_id),
+            "deleted_by_email": ctx.user.email,
+            "deleted_at": document.deleted_at.isoformat(),
+            "document_name": document.display_name,
+            "size_bytes": document.size_bytes,
+            "quarry_id": str(quarry.id),
+        },
+    )
+    db.add(success_audit)
+    db.commit()
+    return document
+
+
+def restore_document(
+    db: Session,
+    ctx: AuthContext,
+    quarry: Quarry,
+    document_id: uuid.UUID,
+    *,
+    expected_version: int | None = None,
+) -> Document:
+    now_utc = datetime.now(timezone.utc)
+    cutoff_30d = now_utc - timedelta(days=30)
+
+    document = db.execute(
+        select(Document)
+        .where(Document.id == document_id)
+        .with_for_update()
+    ).scalar_one_or_none()
+
+    if (
+        document is None
+        or document.company_id != ctx.company_id
+        or document.quarry_id != quarry.id
+    ):
+        raise NotFound("document not found")
+
+    if document.deleted_at is None:
+        raise Conflict("document is not deleted")
+
+    if expected_version is not None and document.version != expected_version:
+        raise PreconditionFailed("document version does not match If-Match")
+
+    # Authorization rule: caller must be company_admin OR the original deleter
+    is_admin = ctx.role == MembershipRole.company_admin
+    is_deleter = document.deleted_by is not None and document.deleted_by == ctx.user_id
+    if not (is_admin or is_deleter):
+        raise Forbidden(
+            "only the deleting employee or a company administrator may restore this document"
+        )
+
+    # Exact 30-day boundary and purge status check:
+    if (
+        document.deleted_at < cutoff_30d
+        or document.purge_attempt > 0
+        or document.purge_claimed_at is not None
+        or document.purge_failed_at is not None
+    ):
+        raise Gone(
+            "document retention period has expired; cannot be restored"
+        )
+
+    # Approved folder fallback: if parent folder is missing or soft-deleted, unfile to root
+    folder_unfiled = False
+    original_folder_id = document.folder_id
+    if document.folder_id is not None:
+        folder = db.get(Folder, document.folder_id)
+        if (
+            folder is None
+            or folder.deleted_at is not None
+            or folder.quarry_id != document.quarry_id
+        ):
+            document.folder_id = None
+            folder_unfiled = True
+
+    original_deleted_by = document.deleted_by
+    original_deleted_at = document.deleted_at
+
+    document.deleted_at = None
+    document.deleted_by = None
+    document.version += 1
+
+    append_changes(
+        db,
+        ctx.company_id,
+        ChangeEntry(
+            quarry_id=quarry.id,
+            entity_type=ChangeEntityType.document,
+            entity_id=document.id,
+            change_type=ChangeType.created,
+            entity_version=document.version,
+            payload=_document_payload(document),
+        ),
+    )
+
+    success_audit = AuditEvent(
+        company_id=ctx.company_id,
+        actor_user_id=ctx.user_id,
+        action="document.restore",
+        target_type="document",
+        target_id=str(document.id),
+        result=AuditResult.success,
+        meta={
+            "restored_by_user_id": str(ctx.user_id),
+            "restored_by_email": ctx.user.email,
+            "restorer_role": ctx.role.value,
+            "previously_deleted_by": str(original_deleted_by) if original_deleted_by else None,
+            "previously_deleted_at": original_deleted_at.isoformat() if original_deleted_at else None,
+            "folder_unfiled": folder_unfiled,
+            "original_folder_id": str(original_folder_id) if original_folder_id else None,
+        },
+    )
+    db.add(success_audit)
+    db.commit()
+    return document
+
+
+def list_trash_documents(
+    db: Session,
+    ctx: AuthContext,
+    quarry: Quarry,
+    *,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[TrashDocumentOut]:
+    now_utc = datetime.now(timezone.utc)
+    cutoff_30d = now_utc - timedelta(days=30)
+
+    stmt = (
+        select(Document)
+        .where(
+            Document.company_id == ctx.company_id,
+            Document.quarry_id == quarry.id,
+            Document.status == DocumentStatus.available,
+            Document.deleted_at.is_not(None),
+            Document.deleted_at >= cutoff_30d,
+            Document.purge_attempt == 0,
+            Document.purge_claimed_at.is_(None),
+            Document.purge_failed_at.is_(None),
+        )
+    )
+    if ctx.role != MembershipRole.company_admin:
+        stmt = stmt.where(Document.deleted_by == ctx.user_id)
+
+    rows = (
+        db.execute(
+            stmt.order_by(Document.deleted_at.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+        .scalars()
+        .all()
+    )
+
+    out: list[TrashDocumentOut] = []
+    for doc in rows:
+        can_restore = (
+            ctx.role == MembershipRole.company_admin
+            or (doc.deleted_by is not None and doc.deleted_by == ctx.user_id)
+        )
+        retention_expires_at = doc.deleted_at + timedelta(days=30)
+        out.append(
+            TrashDocumentOut(
+                id=doc.id,
+                quarry_id=doc.quarry_id,
+                folder_id=doc.folder_id,
+                display_name=doc.display_name,
+                original_filename=doc.original_filename,
+                mime_type=doc.mime_type,
+                size_bytes=doc.size_bytes,
+                version=doc.version,
+                created_at=doc.created_at,
+                deleted_at=doc.deleted_at,
+                deleted_by=doc.deleted_by,
+                can_restore=can_restore,
+                retention_expires_at=retention_expires_at,
+            )
+        )
+    return out
+
+
+@dataclass(frozen=True)
+class PurgeReport:
+    purged_count: int
+    freed_bytes: int
+    failed_count: int
+
+
+def purge_expired_documents(
+    db: Session,
+    storage: Storage,
+    *,
+    retention_days: int = 30,
+    lease_seconds: int = 600,
+    backoff_seconds: int = 300,
+    batch_size: int = 50,
+    now_override: datetime | None = None,
+) -> PurgeReport:
+    now_utc = now_override or datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(days=retention_days)
+    lease_cutoff = now_utc - timedelta(seconds=lease_seconds)
+    backoff_cutoff = now_utc - timedelta(seconds=backoff_seconds)
+
+    # Phase 1: Claim batch under row lock
+    candidates_stmt = (
+        select(Document)
+        .where(
+            Document.deleted_at < cutoff,
+            Document.status == DocumentStatus.available,
+            or_(
+                and_(Document.purge_claimed_at.is_(None), Document.purge_failed_at.is_(None)),
+                and_(Document.purge_claimed_at.is_(None), Document.purge_failed_at < backoff_cutoff),
+                Document.purge_claimed_at < lease_cutoff,
+            ),
+        )
+        .order_by(Document.deleted_at.asc())
+        .limit(batch_size)
+        .with_for_update(skip_locked=True)
+    )
+    candidates = db.execute(candidates_stmt).scalars().all()
+    if not candidates:
+        return PurgeReport(purged_count=0, freed_bytes=0, failed_count=0)
+
+    claimed_items = []
+    for doc in candidates:
+        attempt = doc.purge_attempt + 1
+        token = uuid.uuid4()
+        doc.purge_attempt = attempt
+        doc.purge_token = token
+        doc.purge_claimed_at = now_utc
+        doc.purge_failed_at = None
+        claimed_items.append((doc.id, doc.company_id, doc.quarry_id, doc.storage_ref, doc.size_bytes, token, attempt))
+
+    db.commit()  # Commits Phase 1 claims; in-flight lease active
+
+    purged_count = 0
+    freed_bytes = 0
+    failed_count = 0
+
+    for doc_id, company_id, quarry_id, storage_ref, size_bytes, token, attempt in claimed_items:
+        storage_ok = True
+        if storage_ref:
+            try:
+                storage.delete(storage_ref)
+            except StorageUnavailable as exc:
+                logger.warning("Storage delete failed for %s: %s", storage_ref, exc)
+                storage_ok = False
+            except Exception as exc:
+                logger.error("Unexpected storage delete error for %s: %s", storage_ref, exc)
+                storage_ok = False
+
+        if not storage_ok:
+            failed_count += 1
+            # Fenced failure update: only update if token & attempt still match
+            fail_stmt = (
+                update(Document)
+                .where(
+                    Document.id == doc_id,
+                    Document.purge_token == token,
+                    Document.purge_attempt == attempt,
+                )
+                .values(
+                    purge_failed_at=now_utc,
+                    purge_claimed_at=None,
+                    purge_token=None,
+                )
+            )
+            res = db.execute(fail_stmt)
+            if res.rowcount == 0:
+                db.rollback()  # Stale worker safe no-op
+                logger.info("Purge failure update: doc %s missing or superseded; safe no-op", doc_id)
+            else:
+                db.commit()
+            continue
+
+        # Phase 3: Finalize DB deletion using CAS
+        del_stmt = (
+            delete(Document)
+            .where(
+                Document.id == doc_id,
+                Document.purge_token == token,
+                Document.purge_attempt == attempt,
+            )
+        )
+        res = db.execute(del_stmt)
+        if res.rowcount == 0:
+            db.rollback()
+            logger.info("Purge finalize: doc %s already deleted or superseded; safe no-op", doc_id)
+        else:
+            audit_event = AuditEvent(
+                company_id=company_id,
+                action="document.purge",
+                target_type="document",
+                target_id=str(doc_id),
+                result=AuditResult.success,
+                meta={"storage_ref": storage_ref, "size_bytes": size_bytes},
+            )
+            db.add(audit_event)
+            db.commit()
+            purged_count += 1
+            freed_bytes += size_bytes
+
+    return PurgeReport(purged_count=purged_count, freed_bytes=freed_bytes, failed_count=failed_count)

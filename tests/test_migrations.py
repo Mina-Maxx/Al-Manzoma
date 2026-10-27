@@ -134,7 +134,15 @@ def test_schema_created_by_migrations(engine, _database):
         "created_at",
         "updated_at",
     }.issubset(folder_columns)
-    assert {"version", "deleted_at"}.issubset(document_columns)
+    assert {
+        "version",
+        "deleted_at",
+        "deleted_by",
+        "purge_attempt",
+        "purge_token",
+        "purge_claimed_at",
+        "purge_failed_at",
+    }.issubset(document_columns)
     assert "version >= 1" in version_constraints["ck_folders_version_positive"]
     assert "version >= 1" in version_constraints["ck_documents_version_positive"]
 

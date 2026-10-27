@@ -145,6 +145,23 @@ def test_platform_admin_cannot_access_documents(client, db, auth_header):
     assert upload.status_code == 403
 
 
+def test_platform_admin_can_access_documents_with_company_scope(client, db, auth_header):
+    from tests.factories import make_document
+
+    make_platform_admin(db, auth_user_id="pa")
+    user, company, quarry, _ = provision_user(
+        db, auth_user_id="e1", can_view=True, can_upload=True, can_download=True
+    )
+    document = make_document(db, company, quarry)
+
+    headers = {**auth_header("pa"), "X-Company-Id": str(company.id)}
+    quarries_resp = client.get("/quarries", headers=headers)
+    assert quarries_resp.status_code == 200
+    docs_resp = client.get(f"/quarries/{quarry.id}/documents", headers=headers)
+    assert docs_resp.status_code == 200
+    assert len(docs_resp.json()) == 1
+
+
 def test_suspend_unknown_company_is_404(client, db, auth_header):
     import uuid
 

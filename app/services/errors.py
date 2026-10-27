@@ -44,6 +44,14 @@ class Conflict(DomainError):
     http_status = 409
 
 
+class Forbidden(DomainError):
+    http_status = 403
+
+
+class Gone(DomainError):
+    http_status = 410
+
+
 class PreconditionFailed(DomainError):
     http_status = 412
 

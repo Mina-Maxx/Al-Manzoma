@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.models import AuditResult, Document, DocumentStatus, Quarry
-from app.schemas import DocumentMove, DocumentOut
+from app.schemas import DocumentMove, DocumentOut, TrashDocumentOut
 from app.security.context import AuthContext
 from app.security.deps import (
     get_auth_context,
@@ -36,7 +36,12 @@ from app.security.deps import (
 )
 from app.services import folders as folder_service
 from app.services.audit import AuditService
-from app.services.document_service import upload_document
+from app.services.document_service import (
+    list_trash_documents,
+    restore_document,
+    soft_delete_document,
+    upload_document,
+)
 from app.services.errors import DomainError
 from app.storage.base import Storage, StorageNotFound, StorageUnavailable
 from app.utils.files import sanitize_filename
@@ -204,6 +209,105 @@ def move_document_endpoint(
         request=request,
     )
     return DocumentOut.model_validate(document)
+
+
+@router.delete(
+    "/quarries/{quarry_id}/documents/{document_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_document_endpoint(
+    quarry_id: uuid.UUID,
+    document_id: uuid.UUID,
+    request: Request,
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    quarry: Quarry = Depends(require_quarry_permission("can_upload")),
+    ctx: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+    audit: AuditService = Depends(get_audit),
+) -> Response:
+    try:
+        soft_delete_document(
+            db,
+            ctx,
+            quarry,
+            document_id,
+            expected_version=parse_if_match(if_match),
+        )
+    except Exception as exc:
+        db.rollback()
+        try:
+            audit.record(
+                action="document.delete",
+                result=AuditResult.failure,
+                company_id=ctx.company_id,
+                actor_user_id=ctx.user_id,
+                target_type="document",
+                target_id=str(document_id),
+                meta={"error": type(exc).__name__, "detail": str(exc)},
+                request=request,
+            )
+        except Exception:
+            pass
+        raise
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/quarries/{quarry_id}/documents/{document_id}/restore",
+    response_model=DocumentOut,
+)
+def restore_document_endpoint(
+    quarry_id: uuid.UUID,
+    document_id: uuid.UUID,
+    request: Request,
+    response: Response,
+    if_match: str | None = Header(default=None, alias="If-Match"),
+    quarry: Quarry = Depends(require_quarry_permission("can_view")),
+    ctx: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+    audit: AuditService = Depends(get_audit),
+) -> DocumentOut:
+    try:
+        document = restore_document(
+            db,
+            ctx,
+            quarry,
+            document_id,
+            expected_version=parse_if_match(if_match),
+        )
+    except Exception as exc:
+        db.rollback()
+        try:
+            audit.record(
+                action="document.restore",
+                result=AuditResult.failure,
+                company_id=ctx.company_id,
+                actor_user_id=ctx.user_id,
+                target_type="document",
+                target_id=str(document_id),
+                meta={"error": type(exc).__name__, "detail": str(exc)},
+                request=request,
+            )
+        except Exception:
+            pass
+        raise
+    response.headers["ETag"] = etag_for_version(document.version)
+    return DocumentOut.model_validate(document)
+
+
+@router.get(
+    "/quarries/{quarry_id}/trash",
+    response_model=list[TrashDocumentOut],
+)
+def list_trash_endpoint(
+    quarry_id: uuid.UUID,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    quarry: Quarry = Depends(require_quarry_permission("can_view")),
+    ctx: AuthContext = Depends(get_auth_context),
+    db: Session = Depends(get_db),
+) -> list[TrashDocumentOut]:
+    return list_trash_documents(db, ctx, quarry, limit=limit, offset=offset)
 
 
 @router.get("/documents/{document_id}/download")

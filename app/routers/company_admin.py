@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+from datetime import datetime
 import uuid
 
-from fastapi import APIRouter, Depends, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AuditResult, MembershipRole, QuarryStatus, UserStatus
+from app.models import AuditResult, Document, MembershipRole, QuarryStatus, UserStatus
 from app.schemas import (
+    AuditEventOut,
+    AuditListResponse,
     EmployeeOut,
     InviteRequest,
+    OfficeOverviewOut,
+    OperationalAlertOut,
     PermissionOut,
     PermissionUpdate,
     PermissionsMatrixOut,
@@ -24,6 +30,7 @@ from app.security.deps import (
     require_company_admin,
 )
 from app.services import company_admin as service
+from app.services import platform_analytics as analytics_service
 from app.services.audit import AuditService
 from app.services.errors import RateLimited
 from app.services.identity import IdentityProvider
@@ -268,8 +275,10 @@ def set_permission(
         company_id=ctx.company_id,
         actor_user_id=ctx.user_id,
         target_type="quarry_permission",
-        target_id=f"{user_id}:{quarry_id}",
+        target_id=str(quarry_id),
         meta={
+            "user_id": str(user_id),
+            "quarry_id": str(quarry_id),
             "can_view": body.can_view,
             "can_upload": body.can_upload,
             "can_download": body.can_download,
@@ -301,3 +310,188 @@ def usage(
 ) -> UsageOut:
     data = service.company_usage(db, ctx.company_id)
     return UsageOut(**data)
+
+
+@router.get("/overview", response_model=OfficeOverviewOut)
+def office_overview(
+    days: int = Query(30, ge=1, le=90),
+    ctx: AuthContext = Depends(require_company_admin),
+    db: Session = Depends(get_db),
+) -> OfficeOverviewOut:
+    """Retrieve telemetry, KPI counters, and operational status for this office."""
+    data = analytics_service.get_office_overview(db, ctx.company_id, days=days)
+    return OfficeOverviewOut(
+        **{
+            **data,
+            "alerts": [OperationalAlertOut(**a) for a in data.get("alerts", [])],
+        }
+    )
+
+
+@router.get("/audit", response_model=AuditListResponse)
+def list_company_audit(
+    action: str | None = Query(None),
+    result: str | None = Query(None),
+    search: str | None = Query(None),
+    date_from: datetime | None = Query(None),
+    date_to: datetime | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    ctx: AuthContext = Depends(require_company_admin),
+    db: Session = Depends(get_db),
+) -> AuditListResponse:
+    """Query audit logs strictly scoped to this company."""
+    total, items = analytics_service.list_audit_events(
+        db,
+        company_id=ctx.company_id,
+        action=action,
+        result=result,
+        search=search,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+        offset=offset,
+    )
+    return AuditListResponse(
+        total=total,
+        items=[AuditEventOut(**i) for i in items],
+    )
+
+
+@router.get("/alerts", response_model=list[OperationalAlertOut])
+def get_company_alerts(
+    ctx: AuthContext = Depends(require_company_admin),
+    db: Session = Depends(get_db),
+) -> list[OperationalAlertOut]:
+    """Retrieve operational alerts strictly scoped to this company."""
+    alerts = analytics_service.get_operational_alerts(db, company_id=ctx.company_id)
+    return [OperationalAlertOut(**a) for a in alerts]
+
+
+@router.get("/export/{export_type}")
+def export_company_data(
+    export_type: str,
+    request: Request,
+    ctx: AuthContext = Depends(require_company_admin),
+    db: Session = Depends(get_db),
+    audit: AuditService = Depends(get_audit),
+) -> Response:
+    """Generate safe, injection-sanitized CSV exports scoped to this company."""
+    now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if export_type == "employees":
+        employees = service.list_employees(db, ctx.company_id)
+        headers = ["User ID", "Email", "Full Name", "Status", "Role"]
+        rows = [
+            [
+                str(r["user"].id),
+                r["user"].email or "",
+                r["user"].full_name or "",
+                r["user"].status.value,
+                r["role"].value,
+            ]
+            for r in employees
+        ]
+        filename = f"office_employees_{now_str}.csv"
+
+    elif export_type == "quarries":
+        quarries = service.list_quarries(db, ctx.company_id)
+        headers = ["Quarry ID", "Name", "Status", "Created At"]
+        rows = [
+            [
+                str(q.id),
+                q.name,
+                q.status.value,
+                str(q.created_at),
+            ]
+            for q in quarries
+        ]
+        filename = f"office_quarries_{now_str}.csv"
+
+    elif export_type == "documents":
+        docs = (
+            db.execute(
+                select(Document)
+                .where(Document.company_id == ctx.company_id)
+                .order_by(Document.created_at.desc())
+            )
+            .scalars()
+            .all()
+        )
+        headers = [
+            "Document ID",
+            "Quarry ID",
+            "File Name",
+            "Size Bytes",
+            "Status",
+            "Version",
+            "Deleted At",
+            "Created At",
+        ]
+        rows = [
+            [
+                str(d.id),
+                str(d.quarry_id),
+                d.display_name or d.original_filename,
+                d.size_bytes,
+                d.status.value,
+                d.version,
+                str(d.deleted_at) if d.deleted_at else "",
+                str(d.created_at),
+            ]
+            for d in docs
+        ]
+        filename = f"office_documents_{now_str}.csv"
+
+    elif export_type == "audit":
+        _, events = analytics_service.list_audit_events(
+            db, company_id=ctx.company_id, limit=2000
+        )
+        headers = [
+            "Timestamp",
+            "Action",
+            "Result",
+            "Actor Email",
+            "Target Type",
+            "Target ID",
+            "IP",
+        ]
+        rows = [
+            [
+                str(e["created_at"]),
+                e["action"],
+                e["result"],
+                e["actor_email"] or "",
+                e["target_type"] or "",
+                e["target_id"] or "",
+                e["ip"] or "",
+            ]
+            for e in events
+        ]
+        filename = f"office_audit_{now_str}.csv"
+
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"unknown export type '{export_type}'",
+        )
+
+    csv_content = analytics_service.build_csv(headers, rows)
+
+    audit.record(
+        action=f"company.export.{export_type}",
+        result=AuditResult.success,
+        company_id=ctx.company_id,
+        actor_user_id=ctx.user_id,
+        meta={"row_count": len(rows)},
+        request=request,
+    )
+
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )

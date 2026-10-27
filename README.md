@@ -660,9 +660,69 @@ uvicorn app.main:app
 Do not scale the API to multiple replicas. This restriction is a hard
 requirement of the current design, not a tuning knob.
 
+## Authentication & Authorization (Supabase Auth Integration)
+
+### Architecture
+- **Authentication Provider**: Supabase Auth (Email / Password). Public sign-up is disabled by design.
+- **Asymmetric Signature Verification**: FastAPI validates incoming JWT access tokens using Supabase's live JWKS (`/auth/v1/.well-known/jwks.json`). The project supports asymmetric `ES256` and `RS256` signing algorithms.
+- **Authoritative Authorization Layer**: FastAPI remains the sole authority for tenant isolation and authorization. Roles, permissions, and company memberships are queried dynamically from the application PostgreSQL database; client-supplied company IDs, roles, or claims are never trusted.
+- **Identity Mapping**: The verified Supabase JWT `sub` claim maps directly to `User.auth_user_id`. An unprovisioned Supabase account receives HTTP 403 Forbidden ("user not provisioned"). Inactive users or suspended companies are immediately denied access.
+- **Development Auth Isolation**: Development authentication (`dev_auth`) uses `HS256` and is strictly locked to `APP_ENV=development`. Attempting to instantiate the development verifier in production raises a `RuntimeError`, and production verification rejects all `HS256` tokens.
+
+### Required Environment Variables
+| Variable | Description | Exposed to Client? |
+| --- | --- | --- |
+| `SUPABASE_URL` | Base URL of the Supabase project (e.g. `https://<ref>.supabase.co`) | Yes (public) |
+| `SUPABASE_JWT_AUDIENCE` | Expected audience claim (default: `authenticated`) | No (backend only) |
+| `SUPABASE_JWT_ALGORITHMS` | Permitted signature algorithms (`RS256,ES256`) | No (backend only) |
+| `JWKS_CACHE_TTL_SECONDS` | JWKS cache TTL in seconds (default: `3600`) | No (backend only) |
+| `JWKS_TIMEOUT_SECONDS` | Network timeout for JWKS retrieval (default: `10`) | No (backend only) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Admin API key for employee invitation & suspension | **NO (strictly confidential)** |
+| `SUPABASE_ANON_KEY` | Public client key for GoTrue Auth REST endpoints | Yes (public anon key) |
+
+### Employee Account Provisioning Workflow
+1. An authorized Company Admin issues an invitation via `POST /company/employees/invite`.
+2. The backend calls Supabase Admin API (`/auth/v1/invite`) with the employee's email and redirect URL.
+3. Upon provider success, a local `User` record is created under a company row lock with `auth_user_id` equal to the Supabase user ID, and assigned a `Membership` record with role `employee`.
+4. If database creation fails, compensation automatically disables the identity at the provider.
+
+---
+
+## Android Employee Application
+
+The Android Employee Application is located in `android/` and built using Kotlin, Jetpack Compose, Material 3, and OkHttp.
+
+### Key Capabilities
+- **Direct Supabase Authentication**: Authenticates employees via Supabase GoTrue REST (`/auth/v1/token?grant_type=password`) using the public anon key.
+- **Authoritative Profile Resolution**: Transmits the Supabase `access_token` as a `Bearer` token to FastAPI `GET /me` to load employee identity, company membership, and role.
+- **Bi-lingual Error Handling**: Clear Arabic (RTL) and English error messages for invalid credentials, unprovisioned accounts, inactive users, and network errors.
+- **Session Management**: Secure session persistence with support for auto-restore and explicit logout.
+- **Developer Diagnostics**: Collapsible developer panel for configuring server URLs, inspecting health status, and verifying manual test tokens.
+
+### Building & Running Android
+```bash
+cd android
+
+# Run unit tests (24 tests)
+.\gradlew.bat testDebugUnitTest
+
+# Assemble debug APK
+.\gradlew.bat assembleDebug
+```
+The output APK is generated at:
+`android/app/build/outputs/apk/debug/app-debug.apk`
+
+Local configuration overrides can be placed in `android/local.properties` (ignored by Git):
+```properties
+sdk.dir=C\:\\Users\\Mina Max\\AppData\\Local\\Android\\Sdk
+supabase.url=https://tqwyzrbinkwxbiafbqbj.supabase.co
+supabase.anon.key=<SUPABASE_ANON_KEY>
+backend.base.url=http://10.0.2.2:8000
+```
+
 ## Out of scope (so far)
 
-Android app, a consistent snapshot/keyset endpoint for bootstrap, document
+Consistent snapshot/keyset endpoint for initial sync bootstrap, document
 deletion, restore/trash UI, user-facing version history, retention/purge jobs,
 search, export, sharing links, OCR, notifications, reports, billing, background
-workers, RLS policies, deployment.
+workers, RLS policies, production deployment.

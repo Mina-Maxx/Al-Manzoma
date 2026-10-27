@@ -60,6 +60,36 @@ def test_permissions_are_not_granted_automatically(client, db, auth_header):
     response = client.get("/quarries", headers=auth_header("lonely"))
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_company_admin_has_full_quarry_access_automatically(client, db, auth_header):
+    from app.models import MembershipRole
+    from tests.factories import (
+        make_company,
+        make_document,
+        make_membership,
+        make_quarry,
+        make_user,
+    )
+
+    company = make_company(db)
+    admin_user = make_user(db, auth_user_id="boss")
+    make_membership(db, admin_user, company, role=MembershipRole.company_admin)
+    quarry = make_quarry(db, company)
+    make_document(db, company, quarry)
+
+    resp = client.get("/quarries", headers=auth_header("boss"))
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
+    assert resp.json()[0]["permissions"]["can_view"] is True
+    assert resp.json()[0]["permissions"]["can_upload"] is True
+    assert resp.json()[0]["permissions"]["can_download"] is True
+
+    docs_resp = client.get(
+        f"/quarries/{quarry.id}/documents", headers=auth_header("boss")
+    )
+    assert docs_resp.status_code == 200
+    assert len(docs_resp.json()) == 1
     assert (
         client.get(
             f"/quarries/{quarry.id}/documents", headers=auth_header("lonely")

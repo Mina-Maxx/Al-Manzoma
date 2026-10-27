@@ -23,6 +23,7 @@ SMOKE_EMAIL, SMOKE_PASSWORD, SMOKE_QUARRY_ID, SMOKE_OTHER_QUARRY_ID.
 from __future__ import annotations
 
 import argparse
+import getpass
 import hashlib
 import os
 import sys
@@ -95,6 +96,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--other-quarry-id", default=_env("SMOKE_OTHER_QUARRY_ID"))
     args = parser.parse_args(argv)
 
+    if not args.password and sys.stdin.isatty():
+        try:
+            args.password = getpass.getpass("Employee password (hidden): ")
+        except (EOFError, KeyboardInterrupt):
+            print("\nAborted.")
+            return 1
+
     missing = [
         name
         for name, value in {
@@ -144,7 +152,11 @@ def main(argv: list[str] | None = None) -> int:
                 files={"file": ("smoke.pdf", PDF_BYTES, "application/pdf")},
             )
             if upload.status_code not in (200, 201):
-                _report("upload PDF", False, f"HTTP {upload.status_code}")
+                _report(
+                    "upload PDF",
+                    False,
+                    f"HTTP {upload.status_code} - {upload.text[:500]}",
+                )
                 return 1
             doc = upload.json()
             document_id = doc.get("id")

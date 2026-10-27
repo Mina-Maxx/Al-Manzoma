@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     supabase_jwt_audience: str = "authenticated"
     supabase_jwt_algorithms: str = "RS256,ES256"
     jwks_cache_ttl_seconds: int = 3600
+    jwks_timeout_seconds: float = 10.0
+    jwt_leeway_seconds: int = 10
 
     # Supabase service-role key. Backend-only, never logged, never sent to any
     # client. Required only for employee invitations (Admin API).
