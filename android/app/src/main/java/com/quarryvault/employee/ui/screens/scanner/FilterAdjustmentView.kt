@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -52,14 +53,14 @@ fun FilterAdjustmentView(
                 },
                 navigationIcon = {
                     IconButton(onClick = onRetakeClicked) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Retake")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "إعادة الالتقاط")
                     }
                 },
                 actions = {
                     IconButton(onClick = {
                         rotationDegrees = (rotationDegrees + 90) % 360
                     }) {
-                        Icon(Icons.Default.RotateRight, contentDescription = "Rotate 90°")
+                        Icon(Icons.Default.RotateRight, contentDescription = "تدوير ٩٠ درجة")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -151,7 +152,7 @@ fun FilterAdjustmentView(
             val imgBitmap = remember(previewBitmap) { previewBitmap.asImageBitmap() }
             Image(
                 bitmap = imgBitmap,
-                contentDescription = "Scanned Page Preview",
+                contentDescription = "معاينة الصفحة الممسوحة ضوئياً",
                 modifier = Modifier.fillMaxSize()
             )
         }

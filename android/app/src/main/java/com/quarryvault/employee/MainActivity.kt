@@ -1,6 +1,7 @@
 package com.quarryvault.employee
 
 import android.os.Bundle
+import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,6 +20,7 @@ import com.quarryvault.employee.ui.theme.QuarryVaultTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.decorView.layoutDirection = View.LAYOUT_DIRECTION_RTL
         val sessionStorage = SharedPreferencesSessionStorage(applicationContext)
         val repository = DefaultEmployeeRepository(sessionStorage = sessionStorage)
         setContent {
@@ -31,7 +33,9 @@ class MainActivity : ComponentActivity() {
                         factory = object : ViewModelProvider.Factory {
                             @Suppress("UNCHECKED_CAST")
                             override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                                val vm = EmployeeAppViewModel(repository)
+                                val vm = EmployeeAppViewModel(
+                                    repository = repository
+                                )
                                 vm.customCacheDir = applicationContext.cacheDir
                                 return vm as T
                             }

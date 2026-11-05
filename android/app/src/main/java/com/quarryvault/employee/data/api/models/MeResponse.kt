@@ -6,10 +6,14 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class UserOut(
     val id: String,
+    val username: String? = null,
     val email: String? = null,
     @SerialName("full_name")
     val fullName: String? = null,
-    val status: String
+    val status: String,
+    val role: String = "employee",
+    @SerialName("must_change_password")
+    val mustChangePassword: Boolean = false
 )
 
 @Serializable
@@ -26,8 +30,27 @@ data class CompanyOut(
 )
 
 @Serializable
+data class EffectivePermissions(
+    @SerialName("can_view")
+    val canView: Boolean = true,
+    @SerialName("can_upload")
+    val canUpload: Boolean = true,
+    @SerialName("can_download")
+    val canDownload: Boolean = true,
+    @SerialName("can_delete")
+    val canDelete: Boolean = false
+)
+
+@Serializable
 data class MeResponse(
     val user: UserOut,
     val company: CompanyOut,
-    val role: String
+    val role: String,
+    val permissions: EffectivePermissions? = null
+)
+
+@Serializable
+data class UpdateProfileResponse(
+    val user: UserOut,
+    val message: String? = null
 )

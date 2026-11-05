@@ -91,8 +91,8 @@ fun CameraScannerView(
                             preview,
                             capture
                         )
-                    } catch (e: Exception) {
-                        captureError = e.localizedMessage
+                    } catch (_: Exception) {
+                        captureError = "تعذر تشغيل الكاميرا. يرجى التحقق من الإذن والمحاولة مرة أخرى."
                     }
                 }, ContextCompat.getMainExecutor(ctx))
 
@@ -177,7 +177,7 @@ fun CameraScannerView(
                     .size(44.dp)
                     .background(Color(0x88000000), CircleShape)
             ) {
-                Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                Icon(Icons.Default.Close, contentDescription = "إغلاق", tint = Color.White)
             }
 
             Surface(
@@ -210,7 +210,7 @@ fun CameraScannerView(
                     ImageCapture.FLASH_MODE_AUTO -> Icons.Default.FlashAuto
                     else -> Icons.Default.FlashOff
                 }
-                Icon(icon, contentDescription = "Flash", tint = Color.White)
+                Icon(icon, contentDescription = "الفلاش", tint = Color.White)
             }
         }
 
@@ -274,7 +274,7 @@ fun CameraScannerView(
 
                                 override fun onError(exception: ImageCaptureException) {
                                     isCapturing = false
-                                    captureError = exception.localizedMessage
+                                    captureError = "تعذر التقاط الصورة. يرجى المحاولة مرة أخرى."
                                 }
                             }
                         )
@@ -283,7 +283,7 @@ fun CameraScannerView(
                 ) {
                     Icon(
                         Icons.Default.CameraAlt,
-                        contentDescription = "Capture",
+                        contentDescription = "التقاط صورة",
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(36.dp)
                     )

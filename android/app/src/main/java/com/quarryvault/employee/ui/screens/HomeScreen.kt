@@ -1,6 +1,10 @@
 package com.quarryvault.employee.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -10,7 +14,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -29,13 +35,18 @@ fun HomeScreen(
     onSelectQuarry: (Quarry) -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onRefresh: () -> Unit,
-    onToggleLanguage: () -> Unit,
     onSignOut: () -> Unit,
     onOpenCreateQuarryDialog: () -> Unit = {},
     onDismissCreateQuarryDialog: () -> Unit = {},
-    onNewQuarryNameChange: (String) -> Unit = {},
+    onNewQuarryNameChange: (String) -> Unit,
+    onNewQuarryNumberChange: (String) -> Unit,
+    onNewQuarryTypeChange: (String) -> Unit,
     onConfirmCreateQuarry: () -> Unit = {},
-    onClearCreateQuarrySuccess: () -> Unit = {}
+    onClearCreateQuarrySuccess: () -> Unit = {},
+    onNavigateToTrash: () -> Unit = {},
+    onNavigateToUpdates: () -> Unit = {},
+    onNavigateToProfile: () -> Unit = {},
+    onNavigateToEmployeeManagement: () -> Unit = {}
 ) {
     val isAr = uiState.isArabic
     val layoutDirection = if (isAr) LayoutDirection.Rtl else LayoutDirection.Ltr
@@ -47,7 +58,7 @@ fun HomeScreen(
                     title = {
                         Column {
                             Text(
-                                text = if (isAr) "منظومة محاجر" else "QuarryVault",
+                                text = if (isAr) "المنظومة" else "المنظومة (QuarryVault)",
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold
                             )
@@ -59,15 +70,33 @@ fun HomeScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = onToggleLanguage) {
-                            Text(
-                                text = if (isAr) "EN" else "عربي",
-                                style = MaterialTheme.typography.labelLarge,
-                                fontWeight = FontWeight.Bold
+                        if (uiState.profile?.role == "company_admin") {
+                            IconButton(onClick = onNavigateToEmployeeManagement) {
+                                Icon(
+                                    Icons.Default.Group,
+                                    contentDescription = if (isAr) "إدارة الموظفين" else "Employee Management"
+                                )
+                            }
+                        }
+                        IconButton(onClick = onNavigateToProfile) {
+                            Icon(
+                                Icons.Default.AccountCircle,
+                                contentDescription = if (isAr) "الملف الشخصي" else "Profile"
                             )
                         }
-                        IconButton(onClick = onRefresh) {
-                            Icon(Icons.Default.Refresh, contentDescription = if (isAr) "تحديث" else "Refresh")
+                        IconButton(onClick = onNavigateToUpdates) {
+                            BadgedBox(
+                                badge = {
+                                    if (uiState.updateStatus is UpdateStatus.Available) {
+                                        Badge { Text("!") }
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    Icons.Default.SystemUpdate,
+                                    contentDescription = if (isAr) "التحديثات" else "Updates"
+                                )
+                            }
                         }
                         IconButton(onClick = onSignOut) {
                             Icon(Icons.Default.ExitToApp, contentDescription = if (isAr) "تسجيل خروج" else "Sign out")
@@ -80,73 +109,122 @@ fun HomeScreen(
                 )
             },
             floatingActionButton = {
-                ExtendedFloatingActionButton(
-                    onClick = onOpenCreateQuarryDialog,
-                    icon = { Icon(Icons.Default.Add, contentDescription = null) },
-                    text = { Text(if (isAr) "إنشاء محجر" else "Create Quarry") },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
-                )
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
+                    // Centralized Company Trash FAB (Requirement 5)
+                    FloatingActionButton(
+                        onClick = onNavigateToTrash,
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    ) {
+                        BadgedBox(
+                            badge = {
+                                if (uiState.trashDocuments.isNotEmpty()) {
+                                    Badge {
+                                        Text(text = "${uiState.trashDocuments.size}")
+                                    }
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DeleteOutline,
+                                contentDescription = if (isAr) "سلة المهملات" else "Company Trash"
+                            )
+                        }
+                    }
+
+                    // Create Quarry FAB
+                    ExtendedFloatingActionButton(
+                        onClick = onOpenCreateQuarryDialog,
+                        icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                        text = { Text(if (isAr) "إنشاء محجر" else "Create Quarry") },
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
             }
         ) { innerPadding ->
             val filteredQuarries = uiState.quarries.filter {
                 uiState.quarrySearchQuery.isBlank() ||
                         it.name.contains(uiState.quarrySearchQuery, ignoreCase = true)
             }
+            val sortedQuarries = remember(filteredQuarries) {
+                com.quarryvault.employee.ui.util.UiFormatters.sortAlphabetically(filteredQuarries) { it.name }
+            }
 
-            LazyColumn(
+            PullToRefreshBox(
+                isRefreshing = uiState.isRefreshingQuarries,
+                onRefresh = onRefresh,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding)
-                    .padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                contentPadding = PaddingValues(vertical = 16.dp)
             ) {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    contentPadding = PaddingValues(vertical = 16.dp)
+                ) {
                 // Profile & Storage Usage Card
                 item {
                     ProfileHeaderCard(uiState = uiState, isAr = isAr)
                 }
 
-                // Success Banner if quarry was created
-                if (uiState.createQuarrySuccessMessage != null) {
+                if (uiState.profile?.role == "company_admin") {
                     item {
                         Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable(onClick = onNavigateToEmployeeManagement),
                             colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer
                             ),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth()
+                            shape = RoundedCornerShape(12.dp)
                         ) {
                             Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                modifier = Modifier.padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Row(
-                                    modifier = Modifier.weight(1f),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
                                     Icon(
-                                        Icons.Default.CheckCircle,
+                                        Icons.Default.Group,
                                         contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.primary
+                                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.size(28.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = if (isAr) uiState.createQuarrySuccessMessage.arabic else uiState.createQuarrySuccessMessage.english,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
+                                    Column {
+                                        Text(
+                                            text = if (isAr) "إدارة الموظفين" else "Employee Management",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                        Text(
+                                            text = if (isAr) "إضافة وإدارة موظفي الشركة وتعيين المحاجر" else "Manage employees and quarry assignments",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                                        )
+                                    }
                                 }
-                                IconButton(onClick = onClearCreateQuarrySuccess) {
-                                    Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(18.dp))
-                                }
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowForward,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
                             }
                         }
                     }
                 }
+
+
 
                 // Search Bar
                 item {
@@ -187,7 +265,7 @@ fun HomeScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "(${filteredQuarries.size})",
+                                text = "(${sortedQuarries.size})",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.secondary
                             )
@@ -206,35 +284,7 @@ fun HomeScreen(
                     }
                 }
 
-                // Error Banner if quarries failed to load
-                if (uiState.quarriesError != null) {
-                    item {
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer
-                            ),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(
-                                    text = if (isAr) uiState.quarriesError.arabic else uiState.quarriesError.english,
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Button(
-                                    onClick = onRefresh,
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = MaterialTheme.colorScheme.error
-                                    )
-                                ) {
-                                    Text(if (isAr) "إعادة المحاولة" else "Retry")
-                                }
-                            }
-                        }
-                    }
-                }
+
 
                 // Loading State
                 if (uiState.isLoadingQuarries) {
@@ -248,7 +298,7 @@ fun HomeScreen(
                             CircularProgressIndicator()
                         }
                     }
-                } else if (filteredQuarries.isEmpty()) {
+                } else if (sortedQuarries.isEmpty()) {
                     // Empty State
                     item {
                         Card(
@@ -287,7 +337,7 @@ fun HomeScreen(
                     }
                 } else {
                     // Quarries List
-                    items(filteredQuarries, key = { it.id }) { quarry ->
+                    items(sortedQuarries, key = { it.id }) { quarry ->
                         QuarryCard(
                             quarry = quarry,
                             isAr = isAr,
@@ -295,78 +345,132 @@ fun HomeScreen(
                         )
                     }
                 }
+                }
             }
         }
 
         // Create Quarry Dialog
         if (uiState.isCreateQuarryDialogVisible) {
-            AlertDialog(
-                onDismissRequest = {
-                    if (!uiState.isCreatingQuarry) onDismissCreateQuarryDialog()
-                },
-                title = {
-                    Text(
-                        text = if (isAr) "إنشاء محجر جديد" else "Create New Quarry",
-                        fontWeight = FontWeight.Bold
-                    )
-                },
-                text = {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            text = if (isAr)
-                                "سيظهر هذا المحجر لجميع موظفي الشركة بصلاحية العرض تلقائياً."
-                            else
-                                "This quarry will appear to all company employees with view permission.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        OutlinedTextField(
-                            value = uiState.newQuarryName,
-                            onValueChange = onNewQuarryNameChange,
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text(if (isAr) "اسم المحجر *" else "Quarry Name *") },
-                            placeholder = { Text(if (isAr) "مثال: محجر الجرانيت الشرقي" else "e.g. Eastern Granite Quarry") },
-                            singleLine = true,
-                            enabled = !uiState.isCreatingQuarry,
-                            isError = uiState.createQuarryError != null,
-                            shape = RoundedCornerShape(8.dp)
-                        )
-                        if (uiState.createQuarryError != null) {
-                            Spacer(modifier = Modifier.height(8.dp))
+            CompositionLocalProvider(LocalLayoutDirection provides layoutDirection) {
+                AlertDialog(
+                    onDismissRequest = {
+                        if (!uiState.isCreatingQuarry) onDismissCreateQuarryDialog()
+                    },
+                    title = {
+                        CompositionLocalProvider(LocalLayoutDirection provides layoutDirection) {
                             Text(
-                                text = if (isAr) uiState.createQuarryError.arabic else uiState.createQuarryError.english,
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall
+                                text = if (isAr) "إنشاء محجر جديد" else "Create New Quarry",
+                                fontWeight = FontWeight.Bold
                             )
                         }
-                    }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = onConfirmCreateQuarry,
-                        enabled = uiState.newQuarryName.isNotBlank() && !uiState.isCreatingQuarry
-                    ) {
-                        if (uiState.isCreatingQuarry) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                color = MaterialTheme.colorScheme.onPrimary,
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
+                    },
+                    text = {
+                        CompositionLocalProvider(LocalLayoutDirection provides layoutDirection) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                Text(
+                                    text = if (isAr)
+                                        "سيظهر هذا المحجر لجميع موظفي الشركة بصلاحية العرض تلقائياً."
+                                    else
+                                        "This quarry will appear to all company employees with view permission.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                OutlinedTextField(
+                                    value = uiState.newQuarryName,
+                                    onValueChange = onNewQuarryNameChange,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text(if (isAr) "اسم المحجر *" else "Quarry Name *") },
+                                    placeholder = { Text(if (isAr) "مثال: محجر النور والبركة" else "e.g. Eastern Granite Quarry") },
+                                    singleLine = true,
+                                    enabled = !uiState.isCreatingQuarry,
+                                    isError = uiState.createQuarryError != null,
+                                    shape = RoundedCornerShape(8.dp),
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Text,
+                                        imeAction = ImeAction.Next
+                                    )
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                OutlinedTextField(
+                                    value = uiState.newQuarryNumber,
+                                    onValueChange = onNewQuarryNumberChange,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text(if (isAr) "رقم المحجر الرسمي *" else "Official Quarry Number *") },
+                                    placeholder = { Text(if (isAr) "مثال: ١٠٤/أ أو 104-A" else "e.g. 104-A") },
+                                    singleLine = true,
+                                    enabled = !uiState.isCreatingQuarry,
+                                    isError = uiState.createQuarryError != null,
+                                    shape = RoundedCornerShape(8.dp),
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Text,
+                                        imeAction = ImeAction.Next
+                                    )
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                OutlinedTextField(
+                                    value = uiState.newQuarryType,
+                                    onValueChange = onNewQuarryTypeChange,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text(if (isAr) "نوع المحجر / الخامة *" else "Quarry Type / Material *") },
+                                    placeholder = { Text(if (isAr) "مثال: رخام، جرانيت، حجر جيري، بازلت" else "e.g. Marble, Granite, Basalt") },
+                                    singleLine = true,
+                                    enabled = !uiState.isCreatingQuarry,
+                                    isError = uiState.createQuarryError != null,
+                                    shape = RoundedCornerShape(8.dp),
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Text,
+                                        imeAction = ImeAction.Done
+                                    ),
+                                    keyboardActions = KeyboardActions(
+                                        onDone = {
+                                            if (uiState.newQuarryName.isNotBlank() && uiState.newQuarryNumber.isNotBlank() && uiState.newQuarryType.isNotBlank() && !uiState.isCreatingQuarry) {
+                                                onConfirmCreateQuarry()
+                                            }
+                                        }
+                                    )
+                                )
+                                if (uiState.createQuarryError != null) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        text = if (isAr) uiState.createQuarryError.arabic else uiState.createQuarryError.english,
+                                        color = MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
                         }
-                        Text(if (isAr) "إنشاء" else "Create")
+                    },
+                    confirmButton = {
+                        CompositionLocalProvider(LocalLayoutDirection provides layoutDirection) {
+                            Button(
+                                onClick = onConfirmCreateQuarry,
+                                enabled = uiState.newQuarryName.isNotBlank() && uiState.newQuarryNumber.isNotBlank() && uiState.newQuarryType.isNotBlank() && !uiState.isCreatingQuarry
+                            ) {
+                                if (uiState.isCreatingQuarry) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Text(if (isAr) "إنشاء" else "Create")
+                            }
+                        }
+                    },
+                    dismissButton = {
+                        CompositionLocalProvider(LocalLayoutDirection provides layoutDirection) {
+                            TextButton(
+                                onClick = onDismissCreateQuarryDialog,
+                                enabled = !uiState.isCreatingQuarry
+                            ) {
+                                Text(if (isAr) "إلغاء" else "Cancel")
+                            }
+                        }
                     }
-                },
-                dismissButton = {
-                    TextButton(
-                        onClick = onDismissCreateQuarryDialog,
-                        enabled = !uiState.isCreatingQuarry
-                    ) {
-                        Text(if (isAr) "إلغاء" else "Cancel")
-                    }
-                }
-            )
+                )
+            }
         }
     }
 }
@@ -495,7 +599,7 @@ fun QuarryCard(
 
                     Column {
                         Text(
-                            text = quarry.name,
+                            text = quarry.displayNameFormatted,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
@@ -517,68 +621,6 @@ fun QuarryCard(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Permission Badges
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                PermissionBadge(
-                    label = if (isAr) "عرض" else "View",
-                    granted = quarry.permissions.canView,
-                    icon = Icons.Default.Visibility
-                )
-                PermissionBadge(
-                    label = if (isAr) "رفع" else "Upload",
-                    granted = quarry.permissions.canUpload,
-                    icon = Icons.Default.CloudUpload
-                )
-                PermissionBadge(
-                    label = if (isAr) "تحميل" else "Download",
-                    granted = quarry.permissions.canDownload,
-                    icon = Icons.Default.Download
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun PermissionBadge(
-    label: String,
-    granted: Boolean,
-    icon: androidx.compose.ui.graphics.vector.ImageVector
-) {
-    Surface(
-        shape = RoundedCornerShape(6.dp),
-        color = if (granted) Color(0xFFE8F5E9) else Color(0xFFF5F5F5),
-        border = androidx.compose.foundation.BorderStroke(
-            width = 1.dp,
-            color = if (granted) Color(0xFF81C784) else Color(0xFFE0E0E0)
-        )
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Icon(
-                imageVector = if (granted) Icons.Default.Check else Icons.Default.Close,
-                contentDescription = null,
-                modifier = Modifier.size(14.dp),
-                tint = if (granted) Color(0xFF2E7D32) else Color(0xFF9E9E9E)
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = if (granted) Color(0xFF1B5E20) else Color(0xFF757575),
-                fontWeight = if (granted) FontWeight.Bold else FontWeight.Normal
-            )
         }
     }
 }

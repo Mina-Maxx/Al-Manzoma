@@ -4,48 +4,54 @@ data class LocalizedMessage(
     val english: String,
     val arabic: String
 ) {
-    val display: String get() = "$arabic\n$english"
+    val display: String get() = arabic
 }
 
 object AuthErrorMapper {
 
-    fun mapSupabaseError(
+
+    fun mapLoginError(
         statusCode: Int,
         rawMessage: String,
         code: String? = null
     ): LocalizedMessage {
         val lower = rawMessage.lowercase()
         return when {
-            lower.contains("invalid login credentials") ||
-            lower.contains("invalid_grant") ||
-            statusCode == 400 && lower.contains("credentials") -> {
+            code == "PLATFORM_ADMIN_NOT_ALLOWED" -> {
                 LocalizedMessage(
-                    english = "Incorrect email or password.",
-                    arabic = "البريد الإلكتروني أو كلمة المرور غير صحيحة."
+                    english = "Platform Admin accounts must use the Platform Admin Dashboard.",
+                    arabic = "يجب استخدام لوحة مسؤولي المنصة لهذا الحساب."
                 )
             }
-            lower.contains("email not confirmed") -> {
+            (statusCode == 400 || statusCode == 401) &&
+            (lower.contains("invalid") || lower.contains("credential") || lower.contains("password") || lower.contains("username") || lower.contains("invalid_grant")) -> {
                 LocalizedMessage(
-                    english = "Email address has not been confirmed yet.",
-                    arabic = "لم يتم تأكيد البريد الإلكتروني بعد."
+                    english = "Incorrect username or password.",
+                    arabic = "اسم المستخدم أو كلمة المرور غير صحيحة."
                 )
             }
-            lower.contains("rate limit") || statusCode == 429 -> {
+            statusCode == 401 && (lower.contains("inactive") || lower.contains("disabled")) -> {
                 LocalizedMessage(
-                    english = "Too many attempts. Please try again later.",
-                    arabic = "تم تجاوز عدد المحاولات المسموح به. يرجى المحاولة لاحقاً."
+                    english = "Account is inactive or disabled. Contact administrator.",
+                    arabic = "الحساب غير مفعل أو معطل. يرجى مراجعة إدارة الشركة."
                 )
             }
-            statusCode == 401 -> {
+            statusCode == 503 || statusCode == 504 -> {
                 LocalizedMessage(
-                    english = "Authentication failed. Please check credentials or API key.",
-                    arabic = "فشل التحقق من الهوية. يرجى مراجعة البيانات المدخلة ومفتاح الخدمة."
+                    english = "Authentication service temporarily unavailable. Please try again shortly.",
+                    arabic = "خدمة المصادقة غير متاحة مؤقتاً. يرجى المحاولة بعد قليل."
+                )
+            }
+            statusCode >= 500 -> {
+                LocalizedMessage(
+                    english = "QuarryVault server error ($statusCode). Please try again later.",
+                    arabic = "خطأ في خادم النظام ($statusCode). يرجى المحاولة لاحقاً."
                 )
             }
             else -> {
                 LocalizedMessage(
-                    english = "Authentication error: $rawMessage",
-                    arabic = "خطأ في تسجيل الدخول: $rawMessage"
+                    english = "Authentication could not be completed. Please check your details and try again.",
+                    arabic = "تعذر تسجيل الدخول. يرجى التحقق من البيانات والمحاولة مرة أخرى."
                 )
             }
         }
@@ -58,6 +64,15 @@ object AuthErrorMapper {
     ): LocalizedMessage {
         val lower = detail.lowercase()
         return when {
+            code == "SESSION_INVALIDATED" ||
+            lower.contains("session_terminated_by_new_login") ||
+            lower.contains("logged in from another device") ||
+            lower.contains("logged_in_from_another_device") -> {
+                LocalizedMessage(
+                    english = "Logged in from another device.",
+                    arabic = "تم تسجيل الدخول من جهاز آخر"
+                )
+            }
             statusCode == 401 -> {
                 LocalizedMessage(
                     english = "Session expired or invalid token. Please sign in again.",
@@ -90,8 +105,8 @@ object AuthErrorMapper {
             }
             statusCode == 403 -> {
                 LocalizedMessage(
-                    english = "Access denied: $detail",
-                    arabic = "تم رفض الوصول: $detail"
+                    english = "You do not have permission to complete this action.",
+                    arabic = "ليس لديك صلاحية لتنفيذ هذا الإجراء."
                 )
             }
             statusCode == 404 -> {
@@ -108,8 +123,8 @@ object AuthErrorMapper {
             }
             else -> {
                 LocalizedMessage(
-                    english = "Error ($statusCode): $detail",
-                    arabic = "خطأ ($statusCode): $detail"
+                    english = "The request could not be completed. Please try again.",
+                    arabic = "تعذر إكمال الطلب. يرجى المحاولة مرة أخرى."
                 )
             }
         }
@@ -119,7 +134,7 @@ object AuthErrorMapper {
         val msg = throwable.localizedMessage ?: throwable.javaClass.simpleName
         return LocalizedMessage(
             english = "Network connection failed. Please check your internet connection ($msg).",
-            arabic = "تعذر الاتصال بالخادم. يرجى التحقق من اتصالك بالإنترنت ($msg)."
+            arabic = "تعذر الاتصال بالخادم. يرجى التحقق من اتصالك بالإنترنت والمحاولة مرة أخرى."
         )
     }
 }

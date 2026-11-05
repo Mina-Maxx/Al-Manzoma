@@ -108,7 +108,7 @@ fun ScanReviewUploadView(
                 },
                 navigationIcon = {
                     IconButton(onClick = { showDiscardConfirmation = true }) {
-                        Icon(Icons.Default.Close, contentDescription = "Discard")
+                        Icon(Icons.Default.Close, contentDescription = "إلغاء المراجعة")
                     }
                 },
                 actions = {
@@ -302,7 +302,7 @@ fun ScanReviewUploadView(
                                 if (bitmap != null) {
                                     Image(
                                         bitmap = bitmap.asImageBitmap(),
-                                        contentDescription = "Page ${index + 1}",
+                                        contentDescription = "الصفحة ${index + 1}",
                                         contentScale = ContentScale.Fit,
                                         modifier = Modifier.fillMaxSize()
                                     )
@@ -340,7 +340,7 @@ fun ScanReviewUploadView(
                                 ) {
                                     Icon(
                                         if (isArabic) Icons.AutoMirrored.Filled.ArrowForward else Icons.AutoMirrored.Filled.ArrowBack,
-                                        contentDescription = "Move earlier",
+                                        contentDescription = "نقل إلى موضع سابق",
                                         modifier = Modifier.size(16.dp)
                                     )
                                 }
@@ -352,7 +352,7 @@ fun ScanReviewUploadView(
                                 ) {
                                     Icon(
                                         Icons.Default.Delete,
-                                        contentDescription = "Delete Page",
+                                        contentDescription = "حذف الصفحة",
                                         tint = if (pages.size > 1) MaterialTheme.colorScheme.error else Color.Gray,
                                         modifier = Modifier.size(16.dp)
                                     )
@@ -365,7 +365,7 @@ fun ScanReviewUploadView(
                                 ) {
                                     Icon(
                                         if (isArabic) Icons.AutoMirrored.Filled.ArrowBack else Icons.AutoMirrored.Filled.ArrowForward,
-                                        contentDescription = "Move later",
+                                        contentDescription = "نقل إلى موضع لاحق",
                                         modifier = Modifier.size(16.dp)
                                     )
                                 }

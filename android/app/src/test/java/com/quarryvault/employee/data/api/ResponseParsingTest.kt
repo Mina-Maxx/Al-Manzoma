@@ -6,8 +6,8 @@ import com.quarryvault.employee.data.api.models.Folder
 import com.quarryvault.employee.data.api.models.HealthResponse
 import com.quarryvault.employee.data.api.models.MeResponse
 import com.quarryvault.employee.data.api.models.Quarry
-import com.quarryvault.employee.data.api.models.SupabaseErrorResponse
-import com.quarryvault.employee.data.api.models.SupabaseTokenResponse
+import com.quarryvault.employee.data.api.models.AuthTokenResponse
+import com.quarryvault.employee.data.api.models.ChangePasswordResponse
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -201,44 +201,36 @@ class ResponseParsingTest {
     }
 
     @Test
-    fun parseSupabaseTokenResponse_success() {
+    fun parseAuthTokenResponse_success() {
         val payload = """
             {
                 "access_token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.dummy_payload.dummy_signature",
                 "token_type": "bearer",
                 "expires_in": 3600,
                 "refresh_token": "refresh-token-xyz-123",
+                "session_id": "sess-uuid-456",
                 "user": {
                     "id": "33333333-4444-5555-6666-777777777777",
-                    "email": "employee@quarryvault.com"
+                    "email": "employee@quarryvault.com",
+                    "username": "e2e_emp",
+                    "full_name": "E2E Employee",
+                    "status": "active",
+                    "must_change_password": false
                 }
             }
         """.trimIndent()
 
-        val response = json.decodeFromString<SupabaseTokenResponse>(payload)
+        val response = json.decodeFromString<AuthTokenResponse>(payload)
         assertEquals("eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.dummy_payload.dummy_signature", response.accessToken)
         assertEquals("bearer", response.tokenType)
         assertEquals(3600L, response.expiresIn)
         assertEquals("refresh-token-xyz-123", response.refreshToken)
-        assertNotNull(response.user)
-        assertEquals("33333333-4444-5555-6666-777777777777", response.user?.id)
-        assertEquals("employee@quarryvault.com", response.user?.email)
-    }
-
-    @Test
-    fun parseSupabaseErrorResponse_invalidGrant() {
-        val payload = """
-            {
-                "error": "invalid_grant",
-                "error_description": "Invalid login credentials",
-                "msg": "Invalid login credentials"
-            }
-        """.trimIndent()
-
-        val response = json.decodeFromString<SupabaseErrorResponse>(payload)
-        assertEquals("invalid_grant", response.error)
-        assertEquals("Invalid login credentials", response.errorDescription)
-        assertEquals("Invalid login credentials", response.msg)
+        assertEquals("sess-uuid-456", response.sessionId)
+        assertEquals("33333333-4444-5555-6666-777777777777", response.user.id)
+        assertEquals("employee@quarryvault.com", response.user.email)
+        assertEquals("e2e_emp", response.user.username)
+        assertEquals("active", response.user.status)
+        assertEquals(false, response.user.mustChangePassword)
     }
 
     @Test
@@ -263,6 +255,16 @@ class ResponseParsingTest {
         assertTrue(quarry.permissions.canView)
         assertEquals(false, quarry.permissions.canUpload)
         assertEquals(false, quarry.permissions.canDownload)
+    }
+
+    @Test
+    fun parseChangePasswordResponse_rotatedSessionTokens() {
+        val payload = """{"status":"ok","access_token":"access-rotated","refresh_token":"refresh-rotated","session_id":"session-rotated"}"""
+        val response = json.decodeFromString<ChangePasswordResponse>(payload)
+
+        assertEquals("access-rotated", response.accessToken)
+        assertEquals("refresh-rotated", response.refreshToken)
+        assertEquals("session-rotated", response.sessionId)
     }
 
     @Test

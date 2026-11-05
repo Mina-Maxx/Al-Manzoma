@@ -24,3 +24,10 @@ build/
 .gradle/
 .kotlin/
 **/local.properties
+
+# JavaScript build and dependency artifacts
+node_modules/
+.next/
+*.tsbuildinfo
+/backend/dist/
+/backend/backups/

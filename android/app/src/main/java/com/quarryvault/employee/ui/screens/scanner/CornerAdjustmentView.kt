@@ -8,8 +8,8 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
@@ -80,14 +80,14 @@ fun CornerAdjustmentView(
                 },
                 navigationIcon = {
                     IconButton(onClick = onRetakeClicked) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Retake")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "إعادة الالتقاط")
                     }
                 },
                 actions = {
                     IconButton(onClick = {
                         corners = EdgeDetector.detectCorners(bitmap) ?: DocumentCorners.defaultCorners()
                     }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Reset Edges")
+                        Icon(Icons.Default.Refresh, contentDescription = "إعادة ضبط الحواف")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

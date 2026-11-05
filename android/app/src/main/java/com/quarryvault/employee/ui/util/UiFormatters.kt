@@ -36,4 +36,43 @@ object UiFormatters {
             isoString.substringBefore("T")
         }
     }
+
+    fun formatRemainingDays(isoString: String, isArabic: Boolean = true): String {
+        return try {
+            val inputFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
+            val expiryDate = inputFormat.parse(isoString.substringBefore(".")) ?: return ""
+            val diffMs = expiryDate.time - System.currentTimeMillis()
+            val days = (diffMs / (1000 * 60 * 60 * 24)).coerceAtLeast(0)
+            if (isArabic) {
+                if (days == 0L) "أقل من يوم متبقي" else "$days يوم متبقي للحذف النهائي"
+            } else {
+                if (days == 0L) "Less than 1 day remaining" else "$days days remaining"
+            }
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    fun formatRoleLabel(role: String, isArabic: Boolean = true): String {
+        return when (role) {
+            "platform_admin" -> if (isArabic) "مسؤول المنصة" else "Platform Admin"
+            "company_admin" -> if (isArabic) "أدمن المكتب" else "Office Admin"
+            "employee" -> if (isArabic) "موظف" else "Employee"
+            else -> role
+        }
+    }
+
+    private val arabicCollator: java.text.Collator by lazy {
+        java.text.Collator.getInstance(Locale("ar")).apply {
+            strength = java.text.Collator.PRIMARY
+        }
+    }
+
+    fun <T> sortAlphabetically(items: List<T>, keySelector: (T) -> String): List<T> {
+        return items.sortedWith { a, b ->
+            val keyA = keySelector(a).trim()
+            val keyB = keySelector(b).trim()
+            arabicCollator.compare(keyA, keyB)
+        }
+    }
 }

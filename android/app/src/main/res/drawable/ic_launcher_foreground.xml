@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Back mountain peak -->
+    <path
+        android:pathData="M30,76 L54,34 L78,76 Z"
+        android:fillColor="#2C3E50"/>
+    <path
+        android:pathData="M30,76 L54,34 L54,76 Z"
+        android:fillColor="#34495E"/>
+    <path
+        android:pathData="M48,44 L54,34 L60,44 L54,41 Z"
+        android:fillColor="#E0E6ED"/>
+
+    <!-- Front Left Mountain / Quarry slope -->
+    <path
+        android:pathData="M22,76 L44,42 L66,76 Z"
+        android:fillColor="#1E3E62"/>
+    <path
+        android:pathData="M22,76 L44,42 L44,76 Z"
+        android:fillColor="#2A5282"/>
+
+    <!-- Front Right Main Peak -->
+    <path
+        android:pathData="M42,76 L62,38 L86,76 Z"
+        android:fillColor="#F1C40F"/>
+    <path
+        android:pathData="M42,76 L62,38 L62,76 Z"
+        android:fillColor="#F39C12"/>
+    <path
+        android:pathData="M57,48 L62,38 L67,48 L62,45 Z"
+        android:fillColor="#FFFFFF"/>
+
+    <!-- Base excavation bedrock layers -->
+    <path
+        android:pathData="M18,76 L90,76 L86,80 L22,80 Z"
+        android:fillColor="#D35400"/>
+    <path
+        android:pathData="M20,80 L88,80 L84,84 L24,84 Z"
+        android:fillColor="#A04000"/>
+</vector>
