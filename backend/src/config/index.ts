@@ -121,9 +121,11 @@ export function validateProductionConfig(cfg: AppConfig = config): void {
     }
 
     if (cfg.storageBackend === 'local') {
-      throw new Error(
-        'Fatal: STORAGE_BACKEND=local is prohibited in production. Cloudflare R2 (STORAGE_BACKEND=r2) must be configured.'
-      );
+      if (process.env.ALLOW_LOCAL_STORAGE !== 'true') {
+        throw new Error(
+          'Fatal: STORAGE_BACKEND=local is prohibited in production unless ALLOW_LOCAL_STORAGE=true is set. Cloudflare R2 (STORAGE_BACKEND=r2) is recommended.'
+        );
+      }
     }
 
     if ((cfg.storageBackend === 'r2' || cfg.storageBackend === 's3') && (!cfg.r2AccessKeyId || !cfg.r2SecretAccessKey)) {

@@ -22,7 +22,11 @@ export function createApp(): Express {
   app.use(
     cors({
       origin: (origin, callback) => {
-        if (!origin || origin === config.webOrigin) {
+        if (!origin || config.webOrigin === '*' || origin === config.webOrigin) {
+          return callback(null, true);
+        }
+        const origins = config.webOrigin.split(',').map((o) => o.trim());
+        if (origins.includes(origin)) {
           return callback(null, true);
         }
         return callback(null, false);
