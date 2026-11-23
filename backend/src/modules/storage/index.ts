@@ -239,9 +239,12 @@ export function createStorage(cfg: AppConfig = config): StorageAdapter {
   }
 
   if (isProd && cfg.storageBackend === 'local') {
-    throw new Error(
-      'Fatal: STORAGE_BACKEND=local is not permitted in production. Cloudflare R2 must be configured (STORAGE_BACKEND=r2).'
-    );
+    if (process.env.ALLOW_LOCAL_STORAGE !== 'true') {
+      throw new Error(
+        'Fatal: STORAGE_BACKEND=local is not permitted in production. Cloudflare R2 must be configured (STORAGE_BACKEND=r2).'
+      );
+    }
+    console.warn('[STORAGE WARNING] Running with local disk storage in production because ALLOW_LOCAL_STORAGE=true is set.');
   }
 
   return new LocalDiskStorage(cfg.storageLocalRoot);
