@@ -116,7 +116,7 @@ val localProperties = Properties().apply {
 }
 val configuredDebugBackendUrl = localProperties.getProperty("backend.base.url")
     ?: System.getenv("BACKEND_BASE_URL")
-    ?: "http://192.168.1.8:8000"
+    ?: "https://al-manzoma.onrender.com"
 
 android {
     namespace = "com.quarryvault.employee"
@@ -140,7 +140,7 @@ android {
         release {
             isMinifyEnabled = true
             // Release uses strict production HTTPS URL; never cleartext HTTP, never 192.168.1.8
-            buildConfigField("String", "DEFAULT_BACKEND_URL", "\"https://api.quarryvault.com\"")
+            buildConfigField("String", "DEFAULT_BACKEND_URL", "\"https://al-manzoma.onrender.com\"")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
