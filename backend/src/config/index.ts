@@ -42,6 +42,8 @@ export interface AppConfig {
   inviteRateLimitPerMinute: number;
   /** 'enforce' blocks platform-admin tenant document access without an approved support grant; 'audit' only records it. */
   supportGrantMode: 'audit' | 'enforce';
+  /** Number of reverse proxies in front of the app (Render = 1). Controls req.ip / rate-limit identity. */
+  trustProxyHops: number;
   
   // Storage settings (Cloudflare R2 / S3 compatible)
   storageBackend: 'r2' | 's3' | 'local';
@@ -86,6 +88,7 @@ export const config: AppConfig = {
   idempotencyLeaseSeconds: parseInt(process.env.IDEMPOTENCY_LEASE_SECONDS || '300', 10),
   inviteRateLimitPerMinute: parseInt(process.env.INVITE_RATE_LIMIT_PER_MINUTE || '10', 10),
   supportGrantMode: process.env.SUPPORT_GRANT_MODE === 'enforce' ? 'enforce' : 'audit',
+  trustProxyHops: parseInt(process.env.TRUST_PROXY_HOPS ?? (resolvedEnv === 'production' ? '1' : '0'), 10) || 0,
 
   // Storage
   storageBackend: (process.env.STORAGE_BACKEND as any) || 'local',

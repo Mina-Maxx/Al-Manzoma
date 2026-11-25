@@ -18,6 +18,9 @@ import { config } from './config/index.js';
 export function createApp(): Express {
   const app = express();
 
+  // Behind a reverse proxy (Render) req.ip must come from the proxy-appended X-Forwarded-For entry, never the client-supplied one.
+  app.set('trust proxy', config.trustProxyHops);
+
   // CORS configuration
   app.use(
     cors({

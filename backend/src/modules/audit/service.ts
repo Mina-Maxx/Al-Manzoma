@@ -63,8 +63,8 @@ export class AuditService {
       let userAgent: string | undefined = undefined;
 
       if (opts.request) {
-        const forwarded = opts.request.headers['x-forwarded-for'];
-        ip = typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : opts.request.socket?.remoteAddress;
+        // req.ip honours the configured `trust proxy` hop count; the raw X-Forwarded-For header is client-controlled.
+        ip = opts.request.ip || opts.request.socket?.remoteAddress;
         userAgent = opts.request.headers['user-agent'];
       }
 
