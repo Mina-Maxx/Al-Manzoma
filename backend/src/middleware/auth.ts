@@ -28,6 +28,7 @@ import {
   UpgradeRequiredError,
 } from './errors.js';
 import { auditService } from '../modules/audit/service.js';
+import { findActiveSupportGrant, requestPathname, supportScopeForTenantRequest } from '../services/supportGrants.js';
 
 /**
  * Checks if the request path is one of the minimal permitted endpoints during mandatory password change.
@@ -364,6 +365,27 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
         const targetCompany = await CompanyModel.findById(xCompanyId).lean();
         if (!targetCompany) {
           throw new NotFoundError('company not found');
+        }
+
+        // Tenant document content/metadata needs an approved, unexpired, in-scope support grant.
+        const requiredScope = supportScopeForTenantRequest(req.method, requestPathname(req));
+        if (requiredScope) {
+          const activeGrant = await findActiveSupportGrant(platformAdmin._id, targetCompany._id, requiredScope);
+          if (!activeGrant) {
+            const enforced = config.supportGrantMode === 'enforce';
+            await auditService.record({
+              action: 'platform_admin.support_grant_missing',
+              result: enforced ? AuditResult.denied : AuditResult.success,
+              companyId: targetCompany._id,
+              targetType: 'platform_admin',
+              targetId: platformAdmin._id,
+              meta: { scope: requiredScope, mode: config.supportGrantMode, path: requestPathname(req) },
+              request: req,
+            });
+            if (enforced) {
+              throw new ForbiddenError('an approved support grant is required for this tenant data');
+            }
+          }
         }
 
         const syntheticUser = linkedUser || {

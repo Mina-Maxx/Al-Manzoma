@@ -40,6 +40,8 @@ export interface AppConfig {
   defaultCompanyMaxUsers: number;
   idempotencyLeaseSeconds: number;
   inviteRateLimitPerMinute: number;
+  /** 'enforce' blocks platform-admin tenant document access without an approved support grant; 'audit' only records it. */
+  supportGrantMode: 'audit' | 'enforce';
   
   // Storage settings (Cloudflare R2 / S3 compatible)
   storageBackend: 'r2' | 's3' | 'local';
@@ -83,6 +85,7 @@ export const config: AppConfig = {
   defaultCompanyMaxUsers: parseInt(process.env.DEFAULT_COMPANY_MAX_USERS || '10', 10),
   idempotencyLeaseSeconds: parseInt(process.env.IDEMPOTENCY_LEASE_SECONDS || '300', 10),
   inviteRateLimitPerMinute: parseInt(process.env.INVITE_RATE_LIMIT_PER_MINUTE || '10', 10),
+  supportGrantMode: process.env.SUPPORT_GRANT_MODE === 'enforce' ? 'enforce' : 'audit',
 
   // Storage
   storageBackend: (process.env.STORAGE_BACKEND as any) || 'local',

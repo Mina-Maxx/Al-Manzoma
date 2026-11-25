@@ -7,12 +7,13 @@ const DOCUMENT_METADATA_PATHS = [
   /^\/quarries\/[^/]+\/trash\/?$/,
   /^\/quarries\/[^/]+\/documents\/[^/]+\/versions\/?$/,
   /^\/company\/trash\/?$/,
+  /^\/sync\/changes\/?$/,
 ];
 
 export function supportScopeForTenantRequest(method: string, pathname: string): SupportGrantScope | null {
   const normalizedMethod = method.toUpperCase();
   const normalizedPath = pathname.split('?')[0].replace(/\/+$/, '') || '/';
-  if (normalizedMethod === 'GET' && /^\/documents\/[^/]+\/download$/.test(normalizedPath)) {
+  if (normalizedMethod === 'GET' && /^\/documents\/[^/]+\/(download|view)$/.test(normalizedPath)) {
     return SupportGrantScope.document_download;
   }
   if (normalizedMethod === 'GET' && DOCUMENT_METADATA_PATHS.some((pattern) => pattern.test(normalizedPath))) {
