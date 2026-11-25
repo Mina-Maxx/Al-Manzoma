@@ -5,7 +5,7 @@ import rateLimit from 'express-rate-limit';
 import { v4 as uuidv4 } from 'uuid';
 import { UserModel, PlatformAdminModel } from '../../database/models/index.js';
 import { UserStatus, AuditResult } from '../../types/index.js';
-import { config } from '../../config/index.js';
+import { config, isDevPasswordFallbackEnabled } from '../../config/index.js';
 import { auditService } from '../audit/service.js';
 import { authenticate, isTokenRevoked, verifyToken } from '../../middleware/auth.js';
 import {
@@ -229,7 +229,7 @@ authRouter.post('/login', loginLimiter, async (req: Request, res: Response, next
     let passwordValid = false;
     if (account.password_hash) {
       passwordValid = await bcrypt.compare(password, account.password_hash);
-    } else if (config.env === 'development') {
+    } else if (isDevPasswordFallbackEnabled(config)) {
       // Dev fallback if user has no password set yet
       passwordValid = password === 'admin123' || password === 'password123';
     }

@@ -54,10 +54,18 @@ export interface AppConfig {
   backupEncryptionKey: string;
 }
 
+// Fail closed: when NODE_ENV/APP_ENV is not set we behave as production, so the public development
+// defaults (JWT secret, sync secret, dev-password fallback) are refused instead of silently used.
+const explicitEnv = process.env.NODE_ENV || process.env.APP_ENV;
+const resolvedEnv = explicitEnv || 'production';
+if (!explicitEnv) {
+  console.warn('[config] NODE_ENV is not set; defaulting to production. Set NODE_ENV=development for local development.');
+}
+
 export const config: AppConfig = {
-  env: process.env.NODE_ENV || process.env.APP_ENV || 'development',
+  env: resolvedEnv,
   port: parseInt(process.env.PORT || '8000', 10),
-  enableDocs: process.env.ENABLE_DOCS === 'true' || (process.env.NODE_ENV || process.env.APP_ENV || 'development') !== 'production',
+  enableDocs: process.env.ENABLE_DOCS === 'true' || resolvedEnv !== 'production',
   mongoUri: process.env.MONGODB_URI || 'mongodb://localhost:27017/quarryvault',
   jwtSecret: process.env.JWT_SECRET || process.env.DEV_JWT_SECRET || 'dev-insecure-secret-change-me-32chars-minimum-length!',
   jwtIssuer: process.env.JWT_ISSUER || process.env.DEV_JWT_ISSUER || 'quarryvault-dev',
@@ -88,6 +96,11 @@ export const config: AppConfig = {
   backupStorageDir: process.env.BACKUP_STORAGE_DIR || path.resolve(process.cwd(), 'backups'),
   backupEncryptionKey: process.env.BACKUP_ENCRYPTION_KEY || '',
 };
+
+/** The legacy admin123/password123 login for accounts without a password hash is for explicit local development only. */
+export function isDevPasswordFallbackEnabled(cfg: AppConfig = config): boolean {
+  return cfg.env === 'development' && process.env.NODE_ENV === 'development';
+}
 
 /**
  * Validates that production environments do not run with insecure development defaults.
