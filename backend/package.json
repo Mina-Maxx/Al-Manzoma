@@ -14,6 +14,7 @@
     "migrate": "tsx src/scripts/migrateFromSql.ts",
     "purge": "tsx src/scripts/purgeExpiredDocuments.ts",
     "backfill:folders": "tsx src/scripts/backfillStandardFolders.ts",
+    "indexes:users": "tsx src/scripts/ensureUniqueUserIndexes.ts",
     "backup:dr": "tsx src/scripts/disasterRecovery.ts",
     "permissions:conflicts": "tsx src/scripts/reportPermissionConflicts.ts"
   },
