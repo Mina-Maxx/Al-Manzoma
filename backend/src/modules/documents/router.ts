@@ -23,6 +23,7 @@ import {
   DomainError,
 } from '../../middleware/errors.js';
 import { storage } from '../storage/index.js';
+import { pipeToResponse } from '../../utils/pipeResponse.js';
 import { auditService } from '../audit/service.js';
 import { buildContentDisposition } from '../../utils/contentDisposition.js';
 import { renameDocument } from './service.js';
@@ -340,7 +341,7 @@ documentsRouter.get(['/documents/:id/download', '/documents/:id/view'], authenti
       }
     });
 
-    storageItem.stream.pipe(res);
+    pipeToResponse(storageItem.stream as any, res, next);
   } catch (err) {
     next(err);
   }

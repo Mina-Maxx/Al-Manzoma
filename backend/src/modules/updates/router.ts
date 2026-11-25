@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import { AppReleaseModel } from '../../database/models/index.js';
 import { NotFoundError } from '../../middleware/errors.js';
 import { storage } from '../storage/index.js';
+import { pipeToResponse } from '../../utils/pipeResponse.js';
 import { auditService } from '../audit/service.js';
 import { AuditResult } from '../../types/index.js';
 import { buildContentDisposition } from '../../utils/contentDisposition.js';
@@ -107,7 +108,7 @@ updatesRouter.get('/app/updates/download/:versionCode', async (req: Request, res
       },
     }).catch(() => {});
 
-    file.stream.pipe(res);
+    pipeToResponse(file.stream as any, res, next);
   } catch (err) {
     next(err);
   }

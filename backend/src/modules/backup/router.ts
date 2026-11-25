@@ -12,6 +12,7 @@ import {
 import { authenticatePlatformAdmin } from '../../middleware/auth.js';
 import { NotFoundError, DomainError } from '../../middleware/errors.js';
 import { auditService } from '../audit/service.js';
+import { pipeToResponse } from '../../utils/pipeResponse.js';
 import { AuditResult } from '../../types/index.js';
 
 export const backupRouter = Router();
@@ -247,7 +248,7 @@ backupRouter.get('/:id/download', async (req: Request, res: Response, next) => {
     res.setHeader('Cache-Control', 'private, no-cache, no-store');
 
     const fileStream = fs.createReadStream(backup.archive_path);
-    fileStream.pipe(res);
+    pipeToResponse(fileStream, res, next);
   } catch (err) {
     next(err);
   }
