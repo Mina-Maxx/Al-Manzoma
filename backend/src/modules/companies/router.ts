@@ -340,6 +340,44 @@ companiesRouter.post('/company/employees/:id/reset-password', (_req: Request, _r
 });
 
 /**
+ * Runs `fn` in a transaction that also writes the company document. Concurrent admin removals in the
+ * same company therefore conflict and are retried one after another, which closes the check-then-write
+ * race (write skew) that let two admins remove each other.
+ */
+async function withCompanyAdminGuard<T>(companyId: string, fn: (session: mongoose.ClientSession) => Promise<T>): Promise<T> {
+  const session = await mongoose.startSession();
+  try {
+    let result!: T;
+    await session.withTransaction(async () => {
+      await CompanyModel.updateOne({ _id: companyId }, { $set: { updatedAt: new Date() } }, { session });
+      result = await fn(session);
+    });
+    return result;
+  } finally {
+    await session.endSession();
+  }
+}
+
+/** Throws when removing `targetUserId` would leave the company without an ACTIVE company admin. */
+async function assertAnotherActiveAdminRemains(
+  companyId: string,
+  targetUserId: string,
+  action: string,
+  session: mongoose.ClientSession
+): Promise<void> {
+  const others = await MembershipModel.find(
+    { company_id: companyId, role: MembershipRole.company_admin, user_id: { $ne: targetUserId } },
+    { user_id: 1 }
+  ).session(session).lean();
+  const activeOthers = others.length
+    ? await UserModel.countDocuments({ _id: { $in: others.map((m) => m.user_id) }, status: UserStatus.active }).session(session)
+    : 0;
+  if (activeOthers < 1) {
+    throw new ConflictError(`cannot ${action} the last company administrator`);
+  }
+}
+
+/**
  * POST /company/employees/:id/disable
  * Protected against disabling the last active company admin
  */
@@ -348,25 +386,22 @@ companiesRouter.post('/company/employees/:id/disable', async (req: Request, res:
     const ctx = req.authContext!;
     const targetUserId = req.params.id;
 
-    const membership = await MembershipModel.findOne({ user_id: targetUserId, company_id: ctx.companyId });
-    if (!membership) throw new NotFoundError('employee not found');
+    const user = await withCompanyAdminGuard(ctx.companyId, async (session) => {
+      const membership = await MembershipModel.findOne({ user_id: targetUserId, company_id: ctx.companyId }).session(session);
+      if (!membership) throw new NotFoundError('employee not found');
 
-    if (membership.role === MembershipRole.company_admin) {
-      const adminCount = await MembershipModel.countDocuments({
-        company_id: ctx.companyId,
-        role: MembershipRole.company_admin,
-      });
-      if (adminCount <= 1) {
-        throw new ConflictError('cannot disable the last company administrator');
+      if (membership.role === MembershipRole.company_admin) {
+        await assertAnotherActiveAdminRemains(ctx.companyId, String(targetUserId), 'disable', session);
       }
-    }
 
-    const user = await UserModel.findByIdAndUpdate(
-      targetUserId,
-      { status: UserStatus.inactive, tokens_revoked_at: new Date() },
-      { new: true }
-    );
-    if (!user) throw new NotFoundError('employee not found');
+      const updated = await UserModel.findByIdAndUpdate(
+        targetUserId,
+        { status: UserStatus.inactive, tokens_revoked_at: new Date() },
+        { new: true, session }
+      );
+      if (!updated) throw new NotFoundError('employee not found');
+      return updated;
+    });
 
     await auditService.record({
       action: 'employee.disable',
@@ -517,27 +552,23 @@ companiesRouter.delete(['/company/employees/:id', '/company/:company_id/employee
       throw new ConflictError('cannot delete your own account');
     }
 
-    const membership = await MembershipModel.findOne({ user_id: targetUserId, company_id: ctx.companyId });
-    if (!membership) throw new NotFoundError('employee not found');
-
-    if (membership.role === MembershipRole.company_admin) {
-      const adminCount = await MembershipModel.countDocuments({
-        company_id: ctx.companyId,
-        role: MembershipRole.company_admin,
-      });
-      if (adminCount <= 1) {
-        throw new ConflictError('cannot delete the last company administrator');
-      }
-    }
-
     const user = await UserModel.findById(targetUserId);
     if (!user) throw new NotFoundError('employee not found');
+
+    // Check + membership removal happen atomically so two admins cannot delete each other concurrently.
+    await withCompanyAdminGuard(ctx.companyId, async (session) => {
+      const membership = await MembershipModel.findOne({ user_id: targetUserId, company_id: ctx.companyId }).session(session);
+      if (!membership) throw new NotFoundError('employee not found');
+      if (membership.role === MembershipRole.company_admin) {
+        await assertAnotherActiveAdminRemains(ctx.companyId, String(targetUserId), 'delete', session);
+      }
+      await MembershipModel.deleteOne({ _id: membership._id }, { session });
+    });
 
     // Preserve company content: null creator/deleter references so documents/folders remain intact
     await DocumentModel.updateMany({ uploaded_by: targetUserId }, { uploaded_by: null });
     await DocumentModel.updateMany({ deleted_by: targetUserId }, { deleted_by: null });
 
-    await MembershipModel.deleteOne({ _id: membership._id });
     await QuarryPermissionModel.deleteMany({ user_id: targetUserId });
 
     const remainingMemberships = await MembershipModel.countDocuments({ user_id: targetUserId });
