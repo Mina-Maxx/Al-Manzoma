@@ -20,7 +20,7 @@ usersRouter.get('/me', authenticate, async (req: Request, res: Response, next) =
     const effectivePermissions = {
       can_view: isPlatformAdmin || isCompanyAdmin || (membership?.can_view ?? true),
       can_upload: isPlatformAdmin || isCompanyAdmin || (membership?.can_upload ?? true),
-      can_download: isPlatformAdmin || isCompanyAdmin || (membership?.can_download ?? true),
+      can_download: isPlatformAdmin || isCompanyAdmin || (membership?.can_download ?? false),
       can_delete: isPlatformAdmin || isCompanyAdmin || Boolean(membership?.can_delete),
     };
 

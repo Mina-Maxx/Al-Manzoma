@@ -754,7 +754,9 @@ export function resolveQuarryPermission(
   if (membership?.role === MembershipRole.company_admin || (membership?.role as string) === 'company_admin') {
     return true;
   }
-  const defaultAllowed = permission !== 'can_delete';
+  // Fail closed: no membership, or a membership that never recorded the flag, grants nothing beyond view/upload.
+  if (!membership) return false;
+  const defaultAllowed = permission === 'can_view' || permission === 'can_upload';
   const companyAllowed = membership?.[permission] ?? defaultAllowed;
   const quarryAllowed = quarryPermission?.[permission] ?? true;
   return Boolean(companyAllowed && quarryAllowed);

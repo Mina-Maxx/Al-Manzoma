@@ -130,7 +130,7 @@ quarriesRouter.get('/quarries', authenticate, async (req: Request, res: Response
     const companyWidePerms = {
       can_view: membership?.can_view ?? true,
       can_upload: membership?.can_upload ?? true,
-      can_download: membership?.can_download ?? true,
+      can_download: membership?.can_download ?? false,
       can_delete: membership?.can_delete ?? false,
     };
 

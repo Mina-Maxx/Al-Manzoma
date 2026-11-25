@@ -61,7 +61,7 @@ companiesRouter.get('/company/employees', async (req: Request, res: Response, ne
           permissions: {
             can_view: m.can_view ?? true,
             can_upload: m.can_upload ?? true,
-            can_download: m.can_download ?? true,
+            can_download: m.can_download ?? false,
             can_delete: m.can_delete ?? false,
           },
           hidden_quarries: m.hidden_quarries || [],
@@ -321,7 +321,7 @@ companiesRouter.post(['/company/employees', '/company/:company_id/employees'], a
       permissions: {
         can_view: membership.can_view ?? true,
         can_upload: membership.can_upload ?? true,
-        can_download: membership.can_download ?? true,
+        can_download: membership.can_download ?? false,
         can_delete: membership.can_delete ?? false,
       },
       hidden_quarries: membership.hidden_quarries || [],
@@ -530,7 +530,7 @@ companiesRouter.patch(['/company/employees/:id', '/company/:company_id/employees
       permissions: {
         can_view: membership.can_view ?? true,
         can_upload: membership.can_upload ?? true,
-        can_download: membership.can_download ?? true,
+        can_download: membership.can_download ?? false,
         can_delete: membership.can_delete ?? false,
       },
       hidden_quarries: membership.hidden_quarries || [],
@@ -1029,7 +1029,7 @@ companiesRouter.get('/company/permissions', async (req: Request, res: Response, 
           permissions: {
             can_view: m.can_view ?? true,
             can_upload: m.can_upload ?? true,
-            can_download: m.can_download ?? true,
+            can_download: m.can_download ?? false,
             can_delete: m.can_delete ?? false,
           },
           hidden_quarries: m.hidden_quarries || [],
