@@ -681,12 +681,39 @@ platformRouter.post('/users', async (req: Request, res: Response, next) => {
   }
 });
 
+/** Strict status parser: unknown or missing values are rejected instead of silently enabling the account. */
+function parseUserStatus(value: unknown): UserStatus {
+  if (value === 'active') return UserStatus.active;
+  if (value === 'disabled' || value === 'inactive') return UserStatus.inactive;
+  throw new DomainError("status must be 'active' or 'disabled'", 400);
+}
+
+/** Prevents platform-admin lockout: no self-removal and never the last active platform admin. */
+async function assertPlatformAdminCanBeRemoved(user: { auth_user_id: string }, req: Request, action: string): Promise<void> {
+  const linked = await PlatformAdminModel.findOne({ auth_user_id: user.auth_user_id });
+  if (!linked) return;
+  if (user.auth_user_id === req.platformAdminContext?.authUserId) {
+    throw new ConflictError(`cannot ${action} your own platform administrator account`);
+  }
+  if (linked.status === UserStatus.active) {
+    const activeAdmins = await PlatformAdminModel.countDocuments({ status: UserStatus.active });
+    if (activeAdmins <= 1) {
+      throw new ConflictError(`cannot ${action} the last active platform administrator`);
+    }
+  }
+}
+
 /**
  * PATCH & POST /platform/users/:id/status
  */
 const handleUserStatusUpdate = async (req: Request, res: Response, next: any) => {
   try {
-    const targetStatus = req.body.status === 'disabled' ? UserStatus.inactive : UserStatus.active;
+    const targetStatus = parseUserStatus(req.body?.status);
+    if (targetStatus === UserStatus.inactive) {
+      const existing = await UserModel.findById(req.params.id);
+      if (!existing) throw new NotFoundError('user not found');
+      await assertPlatformAdminCanBeRemoved(existing, req, 'disable');
+    }
     const user = await UserModel.findByIdAndUpdate(
       req.params.id,
       { status: targetStatus, tokens_revoked_at: new Date() },
@@ -771,7 +798,8 @@ platformRouter.patch(['/users/:id', '/platform/users/:id'], async (req: Request,
     }
 
     if (status !== undefined) {
-      const targetStatus = status === 'disabled' || status === UserStatus.inactive ? UserStatus.inactive : UserStatus.active;
+      const targetStatus = parseUserStatus(status);
+      if (targetStatus === UserStatus.inactive) await assertPlatformAdminCanBeRemoved(user, req, 'disable');
       user.status = targetStatus;
     }
 
@@ -811,6 +839,7 @@ platformRouter.patch(['/users/:id', '/platform/users/:id'], async (req: Request,
         // Target role is employee or company_admin
         if (adminDoc) {
           // Demoted from platform admin
+          await assertPlatformAdminCanBeRemoved(user, req, 'demote');
           await PlatformAdminModel.deleteOne({ _id: adminDoc._id });
           adminDoc = null;
         }
@@ -1010,6 +1039,14 @@ platformRouter.patch('/users/:id/role', async (req: Request, res: Response, next
       );
     } else {
       const membership = await MembershipModel.findOne({ user_id: user._id });
+      const linkedAdmin = await PlatformAdminModel.findOne({ auth_user_id: user.auth_user_id });
+      if (linkedAdmin) {
+        if (!membership) {
+          throw new DomainError('a platform administrator needs a company membership to be demoted; use PATCH /platform/users/:id with company_id', 400);
+        }
+        await assertPlatformAdminCanBeRemoved(user, req, 'demote');
+        await PlatformAdminModel.deleteOne({ _id: linkedAdmin._id });
+      }
       if (membership) {
         membership.role = role === 'company_admin' ? MembershipRole.company_admin : MembershipRole.employee;
         await membership.save();
