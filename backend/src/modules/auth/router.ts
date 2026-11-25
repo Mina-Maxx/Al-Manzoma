@@ -66,6 +66,7 @@ export function signAccessToken(payload: { sub: string; email?: string | null; r
   const fullPayload = {
     ...payload,
     client_application: clientApp,
+    token_use: 'access',
   };
   const audience = `${config.jwtAudience || 'quarryvault-dev'}:${clientApp}`;
   return jwt.sign(fullPayload, config.jwtSecret, {
@@ -81,6 +82,7 @@ export function signRefreshToken(payload: { sub: string; client_application?: st
   const fullPayload = {
     ...payload,
     client_application: clientApp,
+    token_use: 'refresh',
   };
   const audience = `${config.jwtAudience || 'quarryvault-dev'}:${clientApp}`;
   return jwt.sign(fullPayload, config.jwtSecret, {
@@ -323,7 +325,7 @@ authRouter.post('/refresh', async (req: Request, res: Response, next) => {
 
     let decoded: any;
     try {
-      decoded = await verifyToken(refreshToken);
+      decoded = await verifyToken(refreshToken, 'refresh');
     } catch (err) {
       throw new UnauthorizedError('Invalid or expired refresh token');
     }

@@ -55,6 +55,7 @@ export interface AuthClaims {
   aud?: string;
   role?: string;
   client_application?: 'android' | 'platform_admin_dashboard';
+  token_use?: 'access' | 'refresh';
   [key: string]: any;
 }
 

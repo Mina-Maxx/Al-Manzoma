@@ -126,7 +126,31 @@ function getJwksClient(): jwksRsa.JwksClient | null {
  * 1. Symmetric HS256 tokens signed with JWT_SECRET (dev auth / direct login tokens)
  * 2. Asymmetric RS256/ES256 Supabase tokens via JWKS
  */
-export async function verifyToken(token: string): Promise<AuthClaims> {
+export type TokenUse = 'access' | 'refresh';
+const ACCESS_TOKEN_MAX_LIFETIME_SECONDS = 3600;
+
+/**
+ * Tokens issued before `token_use` existed are classified by lifetime (access = 1h, refresh = 30d),
+ * so deploying this check does not log everyone out. Remove the inference after 30 days.
+ */
+function resolveTokenUse(claims: AuthClaims): TokenUse {
+  if (claims.token_use === 'access' || claims.token_use === 'refresh') return claims.token_use;
+  if (claims.client_application && typeof claims.exp === 'number' && typeof claims.iat === 'number') {
+    return claims.exp - claims.iat > ACCESS_TOKEN_MAX_LIFETIME_SECONDS ? 'refresh' : 'access';
+  }
+  return 'access';
+}
+
+/** Verifies signature/issuer/audience and, when `expectedUse` is given, that the token is of that type. */
+export async function verifyToken(token: string, expectedUse?: TokenUse): Promise<AuthClaims> {
+  const claims = await verifyTokenClaims(token);
+  if (expectedUse && resolveTokenUse(claims) !== expectedUse) {
+    throw new UnauthorizedError('Invalid token type');
+  }
+  return claims;
+}
+
+async function verifyTokenClaims(token: string): Promise<AuthClaims> {
   const decodedUnverified = jwt.decode(token, { complete: true });
   if (!decodedUnverified || !decodedUnverified.header) {
     throw new UnauthorizedError('Malformed token');
@@ -142,8 +166,10 @@ export async function verifyToken(token: string): Promise<AuthClaims> {
     localAudience,
     `${localAudience}:android`,
     `${localAudience}:platform_admin_dashboard`,
-    'quarryvault-dev',
+    ...(config.env === 'production' ? [] : ['quarryvault-dev']),
   ];
+  const supabaseIssuer = config.supabaseUrl ? `${config.supabaseUrl.replace(/\/+$/, '')}/auth/v1` : null;
+  const acceptedIssuers: [string, ...string[]] = [config.jwtIssuer, ...(supabaseIssuer ? [supabaseIssuer] : [])];
 
   const resolveLocalClaims = (decoded: any, resolve: any, reject: any) => {
     if (decoded?.client_application) {
@@ -159,33 +185,16 @@ export async function verifyToken(token: string): Promise<AuthClaims> {
     resolve(decoded as AuthClaims);
   };
 
-  // 1. Local HS256 token verification
+  // 1. Local HS256 token verification (signature + issuer + audience, no fallbacks)
   if (alg === 'HS256') {
     return new Promise((resolve, reject) => {
       jwt.verify(
         token,
         config.jwtSecret,
-        {
-          algorithms: ['HS256'],
-          audience: validAudiences,
-          issuer: config.jwtIssuer,
-        },
+        { algorithms: ['HS256'], audience: validAudiences, issuer: acceptedIssuers },
         (err: any, decoded: any) => {
-          if (err) {
-            // Also try fallback without strict issuer for dev tolerance
-            jwt.verify(token, config.jwtSecret, { algorithms: ['HS256'], audience: validAudiences }, (err2: any, decoded2: any) => {
-              if (err2) {
-                jwt.verify(token, config.jwtSecret, { algorithms: ['HS256'] }, (err3: any, decoded3: any) => {
-              if (err3) return reject(new UnauthorizedError('Invalid token signature'));
-                  resolveLocalClaims(decoded3, resolve, reject);
-                });
-              } else {
-                resolveLocalClaims(decoded2, resolve, reject);
-              }
-            });
-          } else {
-            resolveLocalClaims(decoded, resolve, reject);
-          }
+          if (err) return reject(new UnauthorizedError('Invalid token signature'));
+          resolveLocalClaims(decoded, resolve, reject);
         }
       );
     });
@@ -268,7 +277,7 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
 
     let claims: AuthClaims;
     try {
-      claims = await verifyToken(token);
+      claims = await verifyToken(token, 'access');
     } catch (err: any) {
       await auditService.record({
         action: 'auth.verify',
@@ -576,7 +585,7 @@ export async function authenticatePlatformAdmin(req: Request, _res: Response, ne
 
     let claims: AuthClaims;
     try {
-      claims = await verifyToken(token);
+      claims = await verifyToken(token, 'access');
     } catch (err: any) {
       throw new UnauthorizedError('invalid credentials');
     }

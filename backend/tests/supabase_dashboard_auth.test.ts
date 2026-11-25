@@ -13,6 +13,9 @@ import { CompanyStatus, UserStatus, MembershipRole } from '../src/types/index.js
 import { UserModel, PlatformAdminModel, MembershipModel } from '../src/database/models/index.js';
 import { config } from '../src/config/index.js';
 
+// Supabase-issued HS256 tokens are only accepted when their issuer matches the configured SUPABASE_URL.
+config.supabaseUrl = 'https://htoloebtdqjqtptqjddx.supabase.co';
+
 const app = createApp();
 
 describe('Supabase Dashboard Authentication & Role Resolution Suite', () => {
